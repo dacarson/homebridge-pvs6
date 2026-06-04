@@ -1,0 +1,63 @@
+{
+  "pluginAlias": "PVS6",
+  "pluginType": "platform",
+  "singular": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "PVS6"
+      },
+      "host": {
+        "title": "Host",
+        "type": "string",
+        "placeholder": "192.168.1.x",
+        "description": "IP address or hostname of the PVS6 on your local network."
+      },
+      "serialNumber": {
+        "title": "Serial Number",
+        "type": "string",
+        "placeholder": "ZT231385000549F1084",
+        "description": "Full PVS6 serial number. The last 5 characters are used as the login password."
+      },
+      "pollInterval": {
+        "title": "Poll Interval (seconds)",
+        "type": "integer",
+        "default": 10,
+        "minimum": 5,
+        "description": "How often to poll the PVS6 for new data. Minimum 5 seconds."
+      },
+      "accessories": {
+        "title": "Accessories",
+        "type": "object",
+        "properties": {
+          "solar": {
+            "title": "Enable Solar Production accessory",
+            "type": "boolean",
+            "default": true
+          },
+          "grid": {
+            "title": "Enable Grid Meter accessory",
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "solarName": {
+        "title": "Solar Accessory Display Name",
+        "type": "string",
+        "default": "Solar Production",
+        "description": "HomeKit display name for the Solar Production accessory."
+      },
+      "gridName": {
+        "title": "Grid Accessory Display Name",
+        "type": "string",
+        "default": "Grid Meter",
+        "description": "HomeKit display name for the Grid Meter accessory."
+      }
+    },
+    "required": ["host", "serialNumber"]
+  }
+}
