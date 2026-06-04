@@ -114,7 +114,7 @@ export class PVS6Client {
     }
 
     // First-time or cache-miss: fetch with match= to create the cache
-    const { status, body } = await this.rawRequest('GET', `/vars?match=${encodeURIComponent(matchPattern)}&fmt=obj`);
+    const { status, body } = await this.rawRequest('GET', `/vars?match=${matchPattern}&fmt=obj`);
 
     if (status === 401) {
       throw new HttpError(401, 'Unauthorized — session expired');
