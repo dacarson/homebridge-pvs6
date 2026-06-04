@@ -6,12 +6,13 @@ A Homebridge plugin that exposes SunStrong PVS6 solar monitoring data to Apple H
 
 ## Overview
 
-`homebridge-pvs6` polls the PVS6 local FCGI API and publishes up to two HomeKit accessories:
+`homebridge-pvs6` polls the PVS6 local FCGI API and publishes up to three HomeKit accessories:
 
-- **Solar Production** — current PV output, cumulative energy, voltage
-- **Grid Meter** — net grid power (import/export), cumulative energy, voltage, per-phase current
+- **Solar Production** — always registered; current PV output, cumulative energy, voltage
+- **Grid Import** — real-time import watts (`max(0, net_p) × 1000`), imported energy, voltage
+- **Grid Export** — real-time export watts (`max(0, −net_p) × 1000`), exported energy, voltage
 
-Each accessory is independently optional. The plugin runs entirely standalone — no InfluxDB, no cloud dependency, no SunStrong Connect required.
+Solar Production is always registered. Grid Import and Grid Export are always registered **as a pair** — enabling one enables both. The grid pair is on by default and can be disabled with `accessories.grid: false`. The plugin runs entirely standalone — no InfluxDB, no cloud dependency, no SunStrong Connect required.
 
 It complements `homebridge-eagle` (Rainforest EAGLE-200 grid meter): the two plugins are fully independent but sit alongside each other naturally in Apple Home and the Eve app, and share the same Eve/fakegato accessory patterns documented in *Implementation Learnings* below.
 
@@ -32,9 +33,10 @@ It complements `homebridge-eagle` (Rainforest EAGLE-200 grid meter): the two plu
 ```
 Homebridge (Node.js)
   └── homebridge-pvs6 plugin
-        ├── PVS6Client          — HTTP auth + varserver polling
-        ├── SolarAccessory      — Eve Energy + fakegato history
-        └── GridAccessory       — Eve Energy + fakegato history
+        ├── PVS6Client              — HTTP auth + varserver polling
+        ├── SolarAccessory          — Eve Energy + fakegato history
+        ├── GridImportAccessory     — Eve Energy + fakegato history
+        └── GridExportAccessory     — Eve Energy + fakegato history (optional)
 ```
 
 ### PVS6Client
@@ -103,30 +105,73 @@ Device 11 is the production meter (`PVS6M0400p`). Used as a cross-check but `liv
 
 ---
 
-### Grid Meter Accessory
+### Grid Import Accessory
+
+Registered as part of the grid pair (unless `accessories.grid: false`). Shows real-time import watts and lifetime imported energy.
 
 **Accessory type:** Eve Energy — standard HAP **Outlet** service (`00000047-0000-1000-8000-0026BB765291`), as for Solar Production above.
 
-**Display name (configurable):** `Grid Meter`
+**Display name (configurable):** `gridName` (default: `"Grid Meter - Import"` when `showGridExport` is `true`; `"Grid Meter"` otherwise)
+
+**Platform accessory UUID:** `hap.uuid.generate(serialNumber + '-grid')`
 
 | Characteristic | HAP UUID | Source | Notes |
 |---|---|---|---|
-| `On` (read-only) | `00000025` | `net_p > 0` (importing) | Off = exporting |
-| `OutletInUse` | `00000026` | always `true` | |
-| Eve Watt | `E863F10D` | `net_p × 1000` | W; negative when exporting |
-| Eve kWh | `E863F10C` | `netLtea3phsumKwh` | Net cumulative |
+| `On` (read-only) | `00000025` | `net_p > 0` | On = importing. No-op setter reverts to polled state. |
+| `OutletInUse` | `00000026` | always `true` | Required by Eve Energy |
+| Eve Watt | `E863F10D` | `max(0, net_p) × 1000` | Import watts; zero when net-exporting |
+| Eve kWh | `E863F10C` | `posLtea3phsumKwh` | Lifetime imported energy |
 | Eve Voltage | `E863F10A` | `v12V` | Line voltage |
 | `Name` | `00000023` | config `gridName` | |
 
-**fakegato history:** Records `power` (W) at each poll. Negative values represent export.
+**fakegato history:** Records `{ time, power }` (W, import only — non-negative) at each poll.
 
-**Apple Home tile:** `On` = grid importing power. `Off` = net exporter. Wattage in detail view.
+**Apple Home tile:** `On` = grid importing power. Wattage in detail view. Eve app shows import history.
+
+---
+
+### Grid Export Accessory
+
+Registered together with Grid Import as part of the grid pair (unless `accessories.grid: false`). Shows real-time export watts and lifetime exported energy.
+
+**Accessory type:** Eve Energy — standard HAP **Outlet** service.
+
+**Display name (configurable):** `gridExportName` (default: `"Grid Meter - Export"`)
+
+**Platform accessory UUID:** `hap.uuid.generate(serialNumber + '-grid-export')` — the `-grid-export` suffix keeps it distinct from the import accessory UUID.
+
+| Characteristic | HAP UUID | Source | Notes |
+|---|---|---|---|
+| `On` (read-only) | `00000025` | `net_p < 0` | On = exporting. No-op setter reverts to polled state. |
+| `OutletInUse` | `00000026` | always `true` | Required by Eve Energy |
+| Eve Watt | `E863F10D` | `max(0, −net_p) × 1000` | Export watts (positive); zero when not exporting |
+| Eve kWh | `E863F10C` | `negLtea3phsumKwh` | Lifetime exported energy |
+| Eve Voltage | `E863F10A` | `v12V` | Line voltage |
+| `Name` | `00000023` | config `gridExportName` | |
+
+**fakegato history:** Records `{ time, power }` (W, export only — non-negative) at each poll.
+
+**Apple Home tile:** `On` = actively exporting to grid. Eve app shows export history.
 
 ---
 
 ## Configuration
 
 Configured via `config.json` in the Homebridge `platforms` array.
+
+Minimal config (solar only — grid disabled):
+
+```json
+{
+  "platform": "PVS6",
+  "name": "PVS6",
+  "host": "192.168.1.x",
+  "serialNumber": "ABCDE12345",
+  "accessories": { "grid": false }
+}
+```
+
+Standard config (solar + grid pair):
 
 ```json
 {
@@ -135,12 +180,9 @@ Configured via `config.json` in the Homebridge `platforms` array.
   "host": "192.168.1.x",
   "serialNumber": "ABCDE12345",
   "pollInterval": 10,
-  "accessories": {
-    "solar": true,
-    "grid": true
-  },
   "solarName": "Solar Production",
-  "gridName": "Grid Meter"
+  "gridName": "Grid Meter - Import",
+  "gridExportName": "Grid Meter - Export"
 }
 ```
 
@@ -151,10 +193,10 @@ Configured via `config.json` in the Homebridge `platforms` array.
 | `host` | string | yes | — | IP or hostname of PVS6 on local network |
 | `serialNumber` | string | yes | — | Full PVS6 serial number (password = last 5 chars) |
 | `pollInterval` | integer | no | `10` | Seconds between polls. Minimum enforced: `5` |
-| `accessories.solar` | boolean | no | `true` | Enable Solar Production accessory |
-| `accessories.grid` | boolean | no | `true` | Enable Grid Meter accessory |
-| `solarName` | string | no | `"Solar Production"` | HomeKit display name |
-| `gridName` | string | no | `"Grid Meter"` | HomeKit display name |
+| `accessories.grid` | boolean | no | `true` | Enable the Grid Import + Grid Export accessory pair. Set `false` to disable both |
+| `solarName` | string | no | `"Solar Production"` | HomeKit display name for solar accessory |
+| `gridName` | string | no | `"Grid Meter - Import"` | HomeKit display name for grid import accessory |
+| `gridExportName` | string | no | `"Grid Meter - Export"` | HomeKit display name for grid export accessory |
 
 ---
 
@@ -204,12 +246,13 @@ Uses [`fakegato-history`](https://github.com/simont77/fakegato-history) npm pack
 ```
 homebridge-pvs6/
 ├── src/
-│   ├── index.ts              — Homebridge platform registration
-│   ├── platform.ts           — PVS6Platform class, accessory lifecycle
-│   ├── pvs6Client.ts         — HTTP auth + polling logic
-│   ├── solarAccessory.ts     — Solar HomeKit accessory
-│   ├── gridAccessory.ts      — Grid HomeKit accessory
-│   └── eveCharacteristics.ts — Eve custom UUID definitions
+│   ├── index.ts                  — Homebridge platform registration
+│   ├── platform.ts               — PVS6Platform class, accessory lifecycle
+│   ├── pvs6Client.ts             — HTTP auth + polling logic
+│   ├── solarAccessory.ts         — Solar HomeKit accessory
+│   ├── gridImportAccessory.ts    — Grid Import HomeKit accessory
+│   ├── gridExportAccessory.ts    — Grid Export HomeKit accessory (optional)
+│   └── eveCharacteristics.ts     — Eve custom UUID definitions
 ├── config.schema.json
 ├── package.json
 ├── tsconfig.json
@@ -247,6 +290,21 @@ Node.js ≥ 18 required (for native `fetch` as an alternative to a HTTP library)
 - Per-leg current characteristics for grid accessory (L1/L2 split)
 - Prometheus metrics endpoint on a configurable port (optional sidecar)
 - HACS-style Homebridge UI config page via `homebridge-config-ui-x` schema extensions
+
+---
+
+## Key Differences from homebridge-eagle
+
+| Aspect | homebridge-pvs6 | homebridge-eagle |
+|---|---|---|
+| Protocol | HTTPS (self-signed cert) | HTTP plain |
+| Auth | Session cookie; re-auth on 401 | Stateless Basic Auth per request |
+| Data format | JSON (varserver key/value flat dict) | XML fragments |
+| Startup | Build varserver cache IDs; discover meter indices | Discover meter `HardwareAddress` via `device_list` |
+| Value format | Native float in JSON | ASCII string with unit suffix |
+| Accessories | Solar (always) + Grid Import + Grid Export (pair, optional via `accessories.grid`) | Grid Import (always) + Grid Export (optional, `showExportMeter`) |
+| Negative power | `net_p` split via `max(0, ±net_p)` across import/export accessories | `InstantaneousDemand` split via `max(0, ±demand)` across import/export accessories |
+| Export kWh source | `negLtea3phsumKwh` from consumption meter | `CurrentSummationReceived` from ZigBee meter |
 
 ---
 
@@ -318,17 +376,30 @@ this.eveEnergyService
   });
 ```
 
-### Eve Watt `minValue` Must Be Negative
+### Split Import/Export — Both Accessories Use Non-Negative Watts
 
-The default `minValue` for a custom float characteristic is `0`. The **Grid** accessory's `net_p` goes negative when the site is net-exporting (solar exceeds load). Set `minValue: -100000` on `EveWatts` or the Eve app will silently clamp all negative (export) values to zero and the history graph will be wrong. This is the single most important value to get right for the Grid accessory.
+`net_p` goes negative when the site is net-exporting. Rather than a single accessory with negative watts, use two mutually exclusive accessories — one for import and one for export — each showing only non-negative values:
+
+```typescript
+// Grid Import: positive when importing, zero when exporting
+const importW = Math.max(0, netPowerKW * 1000);
+
+// Grid Export: positive when exporting, zero when importing
+const exportW = Math.max(0, -netPowerKW * 1000);
+```
+
+This eliminates the `minValue: -100000` requirement and produces cleaner history graphs in the Eve app — import and export are separated into distinct timelines. The export accessory's `On` state is `net_p < 0` and its kWh comes from `negLtea3phsumKwh`; the import accessory's kWh comes from `posLtea3phsumKwh`.
+
+> **Historical note:** An earlier version of this spec used a single Grid Meter with negative watts for export. The split-accessory approach is preferred — it matches the homebridge-eagle pattern and renders correctly in Apple Home without requiring `minValue: -100000`.
 
 ### Stable, Per-Accessory UUID from Hardware Identity
 
-Generate each platform accessory UUID from a stable hardware identifier so cached accessories survive Homebridge restarts. Unlike the single-accessory eagle plugin, pvs6 has **two** accessories backed by one device serial — they must derive **distinct** UUIDs by adding a per-accessory suffix:
+Generate each platform accessory UUID from a stable hardware identifier so cached accessories survive Homebridge restarts. pvs6 has up to three accessories backed by one device serial — they must derive **distinct** UUIDs by adding a per-accessory suffix:
 
 ```typescript
-const solarUuid = this.api.hap.uuid.generate(`${serialNumber}-solar`);
-const gridUuid  = this.api.hap.uuid.generate(`${serialNumber}-grid`);
+const solarUuid      = this.api.hap.uuid.generate(`${serialNumber}-solar`);
+const gridUuid       = this.api.hap.uuid.generate(`${serialNumber}-grid`);
+const gridExportUuid = this.api.hap.uuid.generate(`${serialNumber}-grid-export`);
 ```
 
 Using the config `name` or a hardcoded string breaks caching when the name changes or when multiple instances run.
@@ -370,12 +441,12 @@ Passing `{ storage: 'fs' }` is required for history to persist across restarts; 
 
 The energy history type expects `{ time, power }` with:
 - `time`: Unix timestamp in **seconds** (not milliseconds) — `Math.round(Date.now() / 1000)`
-- `power`: Watts (not kW). For the Grid accessory this value may be **negative** (export).
+- `power`: Watts (not kW). Both grid accessories use non-negative values — import watts for Grid Import, export watts for Grid Export.
 
 ```typescript
 this.historyService.addEntry({
   time: Math.round(Date.now() / 1000),
-  power: this.lastPowerW,   // already in Watts; may be negative for Grid
+  power: this.lastPowerW,   // already in Watts; always >= 0 with the split-accessory design
 });
 ```
 

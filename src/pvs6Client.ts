@@ -3,12 +3,13 @@ import * as http from 'http';
 import { Logger } from 'homebridge';
 
 export interface PVS6Reading {
-  pvPowerW: number;       // solar production in W (from livedata pv_p * 1000)
-  pvEnergyKWh: number;   // solar cumulative kWh (from livedata pv_en)
-  pvVoltageV: number;    // solar line voltage (from production meter v12V)
-  netPowerW: number;     // net grid W, positive = importing (from livedata net_p * 1000)
-  gridNetKWh: number;    // net cumulative kWh (from consumption meter netLtea3phsumKwh)
-  gridVoltageV: number;  // grid line voltage (from consumption meter v12V)
+  pvPowerW: number;        // solar production in W (from livedata pv_p * 1000)
+  pvEnergyKWh: number;    // solar cumulative kWh (from livedata pv_en)
+  pvVoltageV: number;     // solar line voltage (from production meter v12V)
+  netPowerW: number;      // net grid W, positive = importing, negative = exporting (net_p * 1000)
+  gridImportKWh: number;  // lifetime imported kWh (from consumption meter posLtea3phsumKwh)
+  gridExportKWh: number;  // lifetime exported kWh (from consumption meter negLtea3phsumKwh)
+  gridVoltageV: number;   // grid line voltage (from consumption meter v12V)
 }
 
 export class HttpError extends Error {
@@ -38,7 +39,8 @@ export class PVS6Client {
     pvEnergyKWh: 0,
     pvVoltageV: 0,
     netPowerW: 0,
-    gridNetKWh: 0,
+    gridImportKWh: 0,
+    gridExportKWh: 0,
     gridVoltageV: 0,
   };
 
@@ -170,8 +172,11 @@ export class PVS6Client {
     const pvVoltageRaw = prodIdx !== null
       ? this.num(mdata[`/sys/devices/meter/${prodIdx}/v12V`], 'prod.v12V')
       : null;
-    const gridNetKWhRaw = consIdx !== null
-      ? this.num(mdata[`/sys/devices/meter/${consIdx}/netLtea3phsumKwh`], 'cons.netLtea3phsumKwh')
+    const gridImportKWhRaw = consIdx !== null
+      ? this.num(mdata[`/sys/devices/meter/${consIdx}/posLtea3phsumKwh`], 'cons.posLtea3phsumKwh')
+      : null;
+    const gridExportKWhRaw = consIdx !== null
+      ? this.num(mdata[`/sys/devices/meter/${consIdx}/negLtea3phsumKwh`], 'cons.negLtea3phsumKwh')
       : null;
     const gridVoltageRaw = consIdx !== null
       ? this.num(mdata[`/sys/devices/meter/${consIdx}/v12V`], 'cons.v12V')
@@ -182,7 +187,8 @@ export class PVS6Client {
       pvEnergyKWh: pvEnergyKWh ?? last.pvEnergyKWh,
       pvVoltageV: pvVoltageRaw ?? last.pvVoltageV,
       netPowerW: netPowerKW !== null ? Math.round(netPowerKW * 1000 * 10) / 10 : last.netPowerW,
-      gridNetKWh: gridNetKWhRaw ?? last.gridNetKWh,
+      gridImportKWh: gridImportKWhRaw ?? last.gridImportKWh,
+      gridExportKWh: gridExportKWhRaw ?? last.gridExportKWh,
       gridVoltageV: gridVoltageRaw ?? last.gridVoltageV,
     };
 

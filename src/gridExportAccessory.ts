@@ -2,7 +2,7 @@ import { PlatformAccessory, Service } from 'homebridge';
 import { PVS6Platform } from './platform';
 import { PVS6Reading } from './pvs6Client';
 
-export class GridAccessory {
+export class GridExportAccessory {
   private readonly service: Service;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private readonly historyService: any;
@@ -22,7 +22,6 @@ export class GridAccessory {
     const { Characteristic, Service } = platform;
     const { EveWatts, EveKWh, EveVoltage } = platform.eveChars;
 
-    // Accessory information service
     const infoService =
       accessory.getService(Service.AccessoryInformation) ??
       accessory.addService(Service.AccessoryInformation);
@@ -30,16 +29,15 @@ export class GridAccessory {
     infoService
       .setCharacteristic(Characteristic.Manufacturer, 'SunStrong')
       .setCharacteristic(Characteristic.Model, 'PVS6')
-      .setCharacteristic(Characteristic.SerialNumber, `${serialNumber}-grid`);
+      .setCharacteristic(Characteristic.SerialNumber, `${serialNumber}-grid-export`);
 
-    // Eve Energy uses the standard HAP Outlet service as its container.
     this.service =
       accessory.getService(Service.Outlet) ??
       accessory.addService(Service.Outlet, displayName);
 
     this.service.setCharacteristic(Characteristic.Name, displayName);
 
-    // On = true when importing from grid (net_p > 0), off when net-exporting.
+    // On = true when exporting (lastPowerW > 0); always non-negative so the comparison is natural.
     this.service
       .getCharacteristic(Characteristic.On)
       .onGet(() => this.lastPowerW > 0)
@@ -47,13 +45,10 @@ export class GridAccessory {
         this.service.updateCharacteristic(Characteristic.On, this.lastPowerW > 0);
       });
 
-    // OutletInUse is required for Eve Energy to render correctly
     this.service
       .getCharacteristic(Characteristic.OutletInUse)
       .onGet(() => true);
 
-    // EveWatts minValue MUST be negative — grid power goes negative when exporting.
-    // Without this the Eve app silently clamps export values to zero.
     this.service
       .getCharacteristic(EveWatts)
       .onGet(() => this.lastPowerW);
@@ -66,7 +61,6 @@ export class GridAccessory {
       .getCharacteristic(EveVoltage)
       .onGet(() => this.lastVoltageV);
 
-    // fakegato history — power may be negative for export
     this.historyService = new FakeGatoHistoryService('energy', accessory, { storage: 'fs' });
   }
 
@@ -74,8 +68,9 @@ export class GridAccessory {
     const { Characteristic } = this.platform;
     const { EveWatts, EveKWh, EveVoltage } = this.platform.eveChars;
 
-    this.lastPowerW = reading.netPowerW;
-    this.lastEnergyKWh = reading.gridNetKWh;
+    // Non-negative: positive when net-exporting, zero when importing.
+    this.lastPowerW = Math.max(0, -reading.netPowerW);
+    this.lastEnergyKWh = reading.gridExportKWh;
     this.lastVoltageV = reading.gridVoltageV;
 
     this.service.updateCharacteristic(Characteristic.On, this.lastPowerW > 0);
@@ -90,8 +85,7 @@ export class GridAccessory {
     });
 
     this.platform.log.debug(
-      `Grid: ${this.lastPowerW}W  ${this.lastEnergyKWh}kWh  ${this.lastVoltageV}V` +
-        (this.lastPowerW < 0 ? '  (exporting)' : '  (importing)'),
+      `Grid Export: ${this.lastPowerW}W  ${this.lastEnergyKWh}kWh  ${this.lastVoltageV}V`,
     );
   }
 }

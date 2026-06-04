@@ -6,8 +6,9 @@ A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://su
 
 ## Features
 
-- **Solar Production** accessory — real-time PV output (W), lifetime generation (kWh), line voltage (V)
-- **Grid Meter** accessory — net grid power (W, negative when exporting), net cumulative energy (kWh), line voltage (V)
+- **Solar Production** accessory — always registered; real-time PV output (W), lifetime generation (kWh), line voltage (V)
+- **Grid Import + Grid Export** accessory pair — optional (default enabled); each shows non-negative watts and its own Eve app history
+- Import and Export accessories are always registered together as a pair, making import/export history immediately readable as separate graphs
 - Up to 7 days of native power history in the Eve app via [fakegato-history](https://github.com/simont77/fakegato-history)
 - Polls the PVS6 **local** FCGI API — no SunStrong Connect, no cloud dependency
 - Automatically identifies production and consumption CT meters from the PVS6 device list
@@ -34,10 +35,13 @@ The PVS6 exposes a local HTTPS varserver API that this plugin polls on a configu
 
 The plugin automatically identifies the production meter (model suffix `p`, e.g. `PVS6M0400p`) and consumption meter (model suffix `c`, e.g. `PVS6M0400c`) from the device list.
 
-Both accessories render as **smart plugs** in Apple Home:
+All accessories render as **smart plugs** in Apple Home:
 
-- **Solar Production** — `On` when the panels are producing power; wattage and history in the Eve app
-- **Grid Meter** — `On` when importing from the grid, `Off` when net-exporting; negative wattage in the Eve app indicates export
+- **Solar Production** — always registered; `On` when the panels are producing power
+- **Grid Import** — `On` when importing from the grid; zero watts when net-exporting
+- **Grid Export** — `On` when net-exporting solar to the grid; zero watts when importing
+
+Grid Import and Grid Export are always registered together — enabling `accessories.grid` creates both.
 
 ---
 
@@ -64,6 +68,24 @@ npm install -g homebridge-pvs6
 
 Add a platform entry to your Homebridge `config.json`:
 
+Minimal config (solar only — grid disabled):
+
+```json
+{
+  "platforms": [
+    {
+      "platform": "PVS6",
+      "name": "PVS6",
+      "host": "192.168.1.x",
+      "serialNumber": "ZT231385000549A1234",
+      "accessories": { "grid": false }
+    }
+  ]
+}
+```
+
+Standard config (solar + grid import/export pair):
+
 ```json
 {
   "platforms": [
@@ -73,12 +95,9 @@ Add a platform entry to your Homebridge `config.json`:
       "host": "192.168.1.x",
       "serialNumber": "ZT231385000549A1234",
       "pollInterval": 10,
-      "accessories": {
-        "solar": true,
-        "grid": true
-      },
       "solarName": "Solar Production",
-      "gridName": "Grid Meter"
+      "gridName": "Grid Meter - Import",
+      "gridExportName": "Grid Meter - Export"
     }
   ]
 }
@@ -92,10 +111,10 @@ Add a platform entry to your Homebridge `config.json`:
 | `host` | string | yes | — | IP address or hostname of the PVS6 on your local network |
 | `serialNumber` | string | yes | — | Full PVS6 serial number. The last 5 characters are used as the API password |
 | `pollInterval` | integer | no | `10` | Seconds between polls. Minimum enforced: `5` |
-| `accessories.solar` | boolean | no | `true` | Enable the Solar Production accessory |
-| `accessories.grid` | boolean | no | `true` | Enable the Grid Meter accessory |
-| `solarName` | string | no | `"Solar Production"` | HomeKit display name for the solar accessory |
-| `gridName` | string | no | `"Grid Meter"` | HomeKit display name for the grid accessory |
+| `accessories.grid` | boolean | no | `true` | Enable the Grid Import + Grid Export accessory pair. Set `false` to disable both |
+| `solarName` | string | no | `"Solar Production"` | HomeKit display name for the Solar Production accessory |
+| `gridName` | string | no | `"Grid Meter - Import"` | HomeKit display name for the Grid Import accessory |
+| `gridExportName` | string | no | `"Grid Meter - Export"` | HomeKit display name for the Grid Export accessory |
 
 ### Finding Your Serial Number
 
@@ -115,17 +134,25 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 | Eve kWh | `pv_en` | Lifetime generation in kWh |
 | Eve Voltage | Production meter `v12V` | AC line voltage |
 
-### Grid Meter
+### Grid Import
 
 | Characteristic | Source | Notes |
 |---|---|---|
-| On | `net_p > 0` | True when importing from grid; false when net-exporting |
+| On | `net_p > 0` | True when importing from grid |
 | OutletInUse | Always `true` | Required by Eve Energy |
-| Eve Watts | `net_p × 1000` | Net grid power in Watts; **negative values indicate solar export** |
-| Eve kWh | `netLtea3phsumKwh` | Net cumulative energy from the consumption CT meter |
+| Eve Watts | `max(0, net_p) × 1000` | Import watts; zero when net-exporting |
+| Eve kWh | `posLtea3phsumKwh` | Lifetime imported energy from consumption CT meter |
 | Eve Voltage | Consumption meter `v12V` | AC line voltage |
 
-**Solar export:** The Eve app handles negative wattage in the Grid Meter history graph — export power shows as negative bars, making the import/export balance easy to read at a glance.
+### Grid Export *(optional — enabled with `showGridExport: true`)*
+
+| Characteristic | Source | Notes |
+|---|---|---|
+| On | `net_p < 0` | True when net-exporting solar to the grid |
+| OutletInUse | Always `true` | Required by Eve Energy |
+| Eve Watts | `max(0, −net_p) × 1000` | Export watts; zero when importing |
+| Eve kWh | `negLtea3phsumKwh` | Lifetime exported energy from consumption CT meter |
+| Eve Voltage | Consumption meter `v12V` | AC line voltage |
 
 ---
 

@@ -11,7 +11,8 @@ import {
 import { PLATFORM_NAME, PLUGIN_NAME, PVS6Config } from './settings';
 import { PVS6Client, HttpError } from './pvs6Client';
 import { SolarAccessory } from './solarAccessory';
-import { GridAccessory } from './gridAccessory';
+import { GridImportAccessory } from './gridImportAccessory';
+import { GridExportAccessory } from './gridExportAccessory';
 import { createEveCharacteristics, EveChars } from './eveCharacteristics';
 
 const MIN_POLL_INTERVAL = 5;
@@ -33,7 +34,8 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   private readonly pollIntervalMs: number;
 
   private solarAccessory?: SolarAccessory;
-  private gridAccessory?: GridAccessory;
+  private gridImportAccessory?: GridImportAccessory;
+  private gridExportAccessory?: GridExportAccessory;
 
   private pollTimer?: ReturnType<typeof setInterval>;
   private pollInFlight = false;
@@ -99,28 +101,36 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   ): void {
     const { serialNumber } = this.config;
 
-    if (this.config.accessories?.solar !== false) {
-      const name = this.config.solarName ?? 'Solar Production';
-      const uuid = this.api.hap.uuid.generate(`${serialNumber}-solar`);
-      const platformAccessory = this.getOrCreateAccessory(uuid, name);
-      this.solarAccessory = new SolarAccessory(
+    // Solar Production is always registered.
+    const solarName = this.config.solarName ?? 'Solar Production';
+    const solarUuid = this.api.hap.uuid.generate(`${serialNumber}-solar`);
+    this.solarAccessory = new SolarAccessory(
+      this,
+      this.getOrCreateAccessory(solarUuid, solarName),
+      FakeGatoHistoryService,
+      solarName,
+      serialNumber,
+    );
+
+    // Grid Import + Grid Export are registered together as an optional pair (default: enabled).
+    if (this.config.accessories?.grid !== false) {
+      const importName = this.config.gridName ?? 'Grid Meter - Import';
+      const importUuid = this.api.hap.uuid.generate(`${serialNumber}-grid`);
+      this.gridImportAccessory = new GridImportAccessory(
         this,
-        platformAccessory,
+        this.getOrCreateAccessory(importUuid, importName),
         FakeGatoHistoryService,
-        name,
+        importName,
         serialNumber,
       );
-    }
 
-    if (this.config.accessories?.grid !== false) {
-      const name = this.config.gridName ?? 'Grid Meter';
-      const uuid = this.api.hap.uuid.generate(`${serialNumber}-grid`);
-      const platformAccessory = this.getOrCreateAccessory(uuid, name);
-      this.gridAccessory = new GridAccessory(
+      const exportName = this.config.gridExportName ?? 'Grid Meter - Export';
+      const exportUuid = this.api.hap.uuid.generate(`${serialNumber}-grid-export`);
+      this.gridExportAccessory = new GridExportAccessory(
         this,
-        platformAccessory,
+        this.getOrCreateAccessory(exportUuid, exportName),
         FakeGatoHistoryService,
-        name,
+        exportName,
         serialNumber,
       );
     }
@@ -170,7 +180,8 @@ export class PVS6Platform implements DynamicPlatformPlugin {
       try {
         const reading = await this.client.poll();
         this.solarAccessory?.updateValues(reading);
-        this.gridAccessory?.updateValues(reading);
+        this.gridImportAccessory?.updateValues(reading);
+        this.gridExportAccessory?.updateValues(reading);
       } catch (err) {
         if (err instanceof HttpError) {
           if (err.statusCode === 401) {
