@@ -85,8 +85,8 @@ export class PVS6Client {
   // Fetch livedata and meter data, parse into a PVS6Reading.
   // Throws HttpError on HTTP errors; throws Error on timeout or parse failure.
   async poll(): Promise<PVS6Reading> {
-    const livedataVars = await this.fetchCache('livedata', '/sys/livedata/*');
-    const mdataVars = await this.fetchCache('mdata', '/sys/devices/meter/*/');
+    const livedataVars = await this.fetchCache('livedata', '/sys/livedata/');
+    const mdataVars = await this.fetchCache('mdata', '/sys/devices/meter/');
     return this.parseReading(livedataVars, mdataVars);
   }
 
