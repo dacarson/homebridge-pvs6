@@ -1,8 +1,8 @@
 import { API, Characteristic, Formats, Perms } from 'homebridge';
 
+export const EVE_ENERGY_SERVICE_UUID = 'E863F10A-079E-48FF-8F27-9C2605A29F52';
 export const EVE_WATT_UUID = 'E863F10D-079E-48FF-8F27-9C2605A29F52';
 export const EVE_KWH_UUID = 'E863F10C-079E-48FF-8F27-9C2605A29F52';
-export const EVE_VOLT_UUID = 'E863F10A-079E-48FF-8F27-9C2605A29F52';
 
 // HAP expects characteristic constructors typed as { new(): Characteristic; UUID: string }.
 // The inner class inheriting from hap.Characteristic does not satisfy this without a cast.
@@ -11,7 +11,6 @@ export type EveCharClass = { new(): Characteristic; UUID: string };
 export interface EveChars {
   EveWatts: EveCharClass;
   EveKWh: EveCharClass;
-  EveVoltage: EveCharClass;
 }
 
 export function createEveCharacteristics(api: API): EveChars {
@@ -49,27 +48,8 @@ export function createEveCharacteristics(api: API): EveChars {
     }
   }
 
-  // EVE_VOLT_UUID (E863F10A) is the Volt characteristic UUID.
-  // It is NOT used as a service UUID — the container is the standard Outlet service.
-  class EveVoltage extends hap.Characteristic {
-    static readonly UUID = EVE_VOLT_UUID;
-
-    constructor() {
-      super('Eve Voltage', EveVoltage.UUID, {
-        format: Formats.FLOAT,
-        unit: 'V' as string,
-        minValue: 0,
-        maxValue: 400,
-        minStep: 0.1,
-        perms: [Perms.PAIRED_READ, Perms.NOTIFY],
-      });
-      this.value = this.getDefaultValue();
-    }
-  }
-
   return {
     EveWatts: EveWatts as unknown as EveCharClass,
     EveKWh: EveKWh as unknown as EveCharClass,
-    EveVoltage: EveVoltage as unknown as EveCharClass,
   };
 }

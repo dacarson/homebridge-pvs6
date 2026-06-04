@@ -7,7 +7,6 @@ export declare class GridImportAccessory {
     private readonly historyService;
     private lastPowerW;
     private lastEnergyKWh;
-    private lastVoltageV;
     constructor(platform: PVS6Platform, accessory: PlatformAccessory, FakeGatoHistoryService: any, displayName: string, serialNumber: string);
     updateValues(reading: PVS6Reading): void;
 }

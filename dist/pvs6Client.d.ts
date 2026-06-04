@@ -2,11 +2,9 @@ import { Logger } from 'homebridge';
 export interface PVS6Reading {
     pvPowerW: number;
     pvEnergyKWh: number;
-    pvVoltageV: number;
     netPowerW: number;
     gridImportKWh: number;
     gridExportKWh: number;
-    gridVoltageV: number;
 }
 export declare class HttpError extends Error {
     readonly statusCode: number;
@@ -19,7 +17,6 @@ export declare class PVS6Client {
     private sessionCookie;
     private livedataCacheId;
     private mdataCacheId;
-    private productionMeterIdx;
     private consumptionMeterIdx;
     private lastRequestTime;
     private lastReading;

@@ -86,7 +86,7 @@ Device 11 is the production meter (`PVS6M0400p`). Used as a cross-check but `liv
 
 ### Solar Production Accessory
 
-**Accessory type:** Eve Energy — standard HAP **Outlet** service (`00000047-0000-1000-8000-0026BB765291`) with the Eve custom characteristics added to it. Eve recognises the accessory as an energy meter via the custom characteristic UUIDs below, not via the service UUID.
+**Accessory type:** Eve Energy — custom Eve Energy service (`E863F10A-079E-48FF-8F27-9C2605A29F52`). Eve recognises the accessory as an Eve Energy meter via this service UUID.
 
 **Display name (configurable):** `Solar Production`
 
@@ -96,7 +96,6 @@ Device 11 is the production meter (`PVS6M0400p`). Used as a cross-check but `liv
 | `OutletInUse` | `00000026` | always `true` | Required by Eve Energy |
 | Eve Watt | `E863F10D` | `pv_p × 1000` | Converted to W |
 | Eve kWh | `E863F10C` | `pv_en` | Cumulative lifetime |
-| Eve Voltage | `E863F10A` | meter device 11 `v12V` | Line voltage |
 | `Name` | `00000023` | config `solarName` | |
 
 **fakegato history:** Records `power` (W) at each poll interval. History service UUID `E863F007-079E-48FF-8F27-9C2605A29F52`.
@@ -109,9 +108,9 @@ Device 11 is the production meter (`PVS6M0400p`). Used as a cross-check but `liv
 
 Registered as part of the grid pair (unless `accessories.grid: false`). Shows real-time import watts and lifetime imported energy.
 
-**Accessory type:** Eve Energy — standard HAP **Outlet** service (`00000047-0000-1000-8000-0026BB765291`), as for Solar Production above.
+**Accessory type:** Eve Energy — custom Eve Energy service (`E863F10A-079E-48FF-8F27-9C2605A29F52`), as for Solar Production above.
 
-**Display name (configurable):** `gridName` (default: `"Grid Meter - Import"` when `showGridExport` is `true`; `"Grid Meter"` otherwise)
+**Display name (configurable):** `gridName` (default: `"Grid Meter - Import"`)
 
 **Platform accessory UUID:** `hap.uuid.generate(serialNumber + '-grid')`
 
@@ -121,7 +120,6 @@ Registered as part of the grid pair (unless `accessories.grid: false`). Shows re
 | `OutletInUse` | `00000026` | always `true` | Required by Eve Energy |
 | Eve Watt | `E863F10D` | `max(0, net_p) × 1000` | Import watts; zero when net-exporting |
 | Eve kWh | `E863F10C` | `posLtea3phsumKwh` | Lifetime imported energy |
-| Eve Voltage | `E863F10A` | `v12V` | Line voltage |
 | `Name` | `00000023` | config `gridName` | |
 
 **fakegato history:** Records `{ time, power }` (W, import only — non-negative) at each poll.
@@ -134,7 +132,7 @@ Registered as part of the grid pair (unless `accessories.grid: false`). Shows re
 
 Registered together with Grid Import as part of the grid pair (unless `accessories.grid: false`). Shows real-time export watts and lifetime exported energy.
 
-**Accessory type:** Eve Energy — standard HAP **Outlet** service.
+**Accessory type:** Eve Energy — custom Eve Energy service (`E863F10A-079E-48FF-8F27-9C2605A29F52`), as for Solar Production above.
 
 **Display name (configurable):** `gridExportName` (default: `"Grid Meter - Export"`)
 
@@ -146,7 +144,6 @@ Registered together with Grid Import as part of the grid pair (unless `accessori
 | `OutletInUse` | `00000026` | always `true` | Required by Eve Energy |
 | Eve Watt | `E863F10D` | `max(0, −net_p) × 1000` | Export watts (positive); zero when not exporting |
 | Eve kWh | `E863F10C` | `negLtea3phsumKwh` | Lifetime exported energy |
-| Eve Voltage | `E863F10A` | `v12V` | Line voltage |
 | `Name` | `00000023` | config `gridExportName` | |
 
 **fakegato history:** Records `{ time, power }` (W, export only — non-negative) at each poll.
@@ -320,12 +317,12 @@ Lessons carried over from building `homebridge-eagle`, which uses the same Eve E
 
 ### Custom Eve Service: find by UUID, not `getService()`
 
-`accessory.getService(string)` in hap-nodejs matches by `displayName`, `name`, or `subtype` — **not** by UUID. After a Homebridge restart the cached accessory's service will not be found, and a duplicate service will be added, causing errors. Match by the service constructor/UUID instead. The Eve Energy accessory uses the standard HAP **Outlet** service as its container (applies to **both** the Solar and Grid accessories):
+`accessory.getService(string)` in hap-nodejs matches by `displayName`, `name`, or `subtype` — **not** by UUID. After a Homebridge restart the cached accessory's service will not be found, and a duplicate service will be added, causing errors. Match by UUID via `accessory.services.find()` instead. The Eve Energy accessory uses the custom Eve Energy service UUID `E863F10A-079E-48FF-8F27-9C2605A29F52` as its container — this is what causes Eve app to render the accessory as an Eve Energy meter rather than a generic plug:
 
 ```typescript
-this.eveEnergyService =
-  accessory.getService(api.hap.Service.Outlet) ??
-  accessory.addService(api.hap.Service.Outlet, displayName);
+const existingService = accessory.services.find(s => s.UUID === EVE_ENERGY_SERVICE_UUID);
+this.service = existingService ??
+  accessory.addService(new platform.api.hap.Service(displayName, EVE_ENERGY_SERVICE_UUID));
 ```
 
 ### Custom Eve Characteristics: `getCharacteristic()` not `addCharacteristic()`
@@ -340,20 +337,16 @@ this.eveEnergyService.getCharacteristic(EveWatts).onGet(() => this.lastPowerW);
 this.eveEnergyService.addCharacteristic(EveWatts).onGet(() => this.lastPowerW);
 ```
 
-### Eve Energy: Container Service and Characteristic UUIDs
+### Eve Energy: Service and Characteristic UUIDs
 
-There is **no dedicated "Eve Energy" service UUID.** Eve renders an accessory as an energy meter when it finds the Eve custom *characteristics* on it — the container is the standard HAP **Outlet** service (`00000047-0000-1000-8000-0026BB765291`). Add the Eve characteristics to that Outlet service; do not invent a custom service UUID.
+`E863F10A-079E-48FF-8F27-9C2605A29F52` serves double duty in the Eve ecosystem: it is the **Eve Energy service UUID** that tells Eve app to render the accessory as an energy meter. It is also documented as the Volt characteristic UUID, but since the Volt characteristic lives on the same service and a service and characteristic cannot share a UUID, voltage is not used. The fakegato history service is separate: `E863F007-079E-48FF-8F27-9C2605A29F52`.
 
-The canonical Eve characteristic UUIDs (per the [simont77](https://gist.github.com/simont77/3f4d4330fa55b83f8ca96388d9004e7d) and [gomfunkel](https://gist.github.com/gomfunkel/b1a046d729757120907c) gists) are:
+The canonical Eve characteristic UUIDs used by this plugin (per the [simont77](https://gist.github.com/simont77/3f4d4330fa55b83f8ca96388d9004e7d) and [gomfunkel](https://gist.github.com/gomfunkel/b1a046d729757120907c) gists) are:
 
 | Eve characteristic | UUID | Eve app label |
 |---|---|---|
-| Volt | `E863F10A-079E-48FF-8F27-9C2605A29F52` | Voltage |
 | Watt | `E863F10D-079E-48FF-8F27-9C2605A29F52` | Consumption |
 | Kilowatt-hour | `E863F10C-079E-48FF-8F27-9C2605A29F52` | Total Consumption |
-| Ampere | `E863F126-079E-48FF-8F27-9C2605A29F52` | Current |
-
-> **Avoid the UUID collision:** `E863F10A` is the **Volt characteristic** UUID. Do not also use it as the service UUID (an earlier draft of this spec did) — a characteristic and its enclosing service cannot share a UUID. Using the Outlet service as the container avoids the collision entirely. The fakegato history service is separate: `E863F007-079E-48FF-8F27-9C2605A29F52`.
 
 ### `OutletInUse` Is Required
 
