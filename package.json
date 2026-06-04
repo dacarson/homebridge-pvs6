@@ -3,6 +3,7 @@
   "displayName": "PVS6 Solar",
   "version": "1.0.0",
   "description": "Homebridge plugin for SunStrong PVS6 solar monitoring — Eve Energy accessories with fakegato history.",
+  "author": "dacarson",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
