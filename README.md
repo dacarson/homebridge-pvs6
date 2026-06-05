@@ -6,7 +6,7 @@ A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://su
 
 ## Features
 
-- **Solar Production** accessory — always registered; real-time PV output (W), lifetime generation (kWh), line voltage (V)
+- **Solar Production** accessory — always registered; real-time PV output (W), lifetime generation (kWh)
 - **Grid Import + Grid Export** accessory pair — optional (default enabled); each shows non-negative watts and its own Eve app history
 - Import and Export accessories are always registered together as a pair, making import/export history immediately readable as separate graphs
 - Up to 7 days of native power history in the Eve app via [fakegato-history](https://github.com/simont77/fakegato-history)
@@ -132,7 +132,6 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 | OutletInUse | Always `true` | Required by Eve Energy |
 | Eve Watts | `pv_p × 1000` | Real-time solar output in Watts |
 | Eve kWh | `pv_en` | Lifetime generation in kWh |
-| Eve Voltage | Production meter `v12V` | AC line voltage |
 
 ### Grid Import
 
@@ -142,9 +141,8 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 | OutletInUse | Always `true` | Required by Eve Energy |
 | Eve Watts | `max(0, net_p) × 1000` | Import watts; zero when net-exporting |
 | Eve kWh | `posLtea3phsumKwh` | Lifetime imported energy from consumption CT meter |
-| Eve Voltage | Consumption meter `v12V` | AC line voltage |
 
-### Grid Export *(optional — enabled with `showGridExport: true`)*
+### Grid Export *(optional — enabled with `accessories.grid: true`)*
 
 | Characteristic | Source | Notes |
 |---|---|---|
@@ -152,7 +150,6 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 | OutletInUse | Always `true` | Required by Eve Energy |
 | Eve Watts | `max(0, −net_p) × 1000` | Export watts; zero when importing |
 | Eve kWh | `negLtea3phsumKwh` | Lifetime exported energy from consumption CT meter |
-| Eve Voltage | Consumption meter `v12V` | AC line voltage |
 
 ---
 
