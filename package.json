@@ -18,7 +18,7 @@
   },
   "engines": {
     "node": ">=18.0.0",
-    "homebridge": ">=1.6.0"
+    "homebridge": ">=2.0.0"
   },
   "main": "dist/index.js",
   "files": [
@@ -39,7 +39,7 @@
     "energy"
   ],
   "peerDependencies": {
-    "homebridge": ">=1.6.0"
+    "homebridge": ">=2.0.0"
   },
   "dependencies": {
     "fakegato-history": "^0.6.7"
