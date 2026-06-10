@@ -20,13 +20,13 @@
         "title": "Host",
         "type": "string",
         "placeholder": "pvs.local",
-        "description": "IP address or hostname of the PVS6. Used only when Auto Discover is disabled."
+        "description": "IP address or hostname of the PVS6. Ignored when Auto Discover is enabled."
       },
       "serialNumber": {
         "title": "Serial Number",
         "type": "string",
         "placeholder": "ZT231385000549F1084",
-        "description": "Full PVS6 serial number. The last 5 characters are used as the login password. Used only when Auto Discover is disabled."
+        "description": "Full PVS6 serial number. The last 5 characters are used as the login password. Ignored when Auto Discover is enabled."
       },
       "pollInterval": {
         "title": "Poll Interval (seconds)",
@@ -72,11 +72,11 @@
     { "key": "autoDiscover" },
     {
       "key": "host",
-      "condition": { "functionBody": "return !model.autoDiscover" }
+      "readonly": "model.autoDiscover"
     },
     {
       "key": "serialNumber",
-      "condition": { "functionBody": "return !model.autoDiscover" }
+      "readonly": "model.autoDiscover"
     },
     { "key": "pollInterval" },
     { "key": "accessories.grid" },
