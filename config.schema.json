@@ -72,11 +72,11 @@
     { "key": "autoDiscover" },
     {
       "key": "host",
-      "readonly": "model.autoDiscover"
+      "readonly": { "functionBody": "return !!model.autoDiscover" }
     },
     {
       "key": "serialNumber",
-      "readonly": "model.autoDiscover"
+      "readonly": { "functionBody": "return !!model.autoDiscover" }
     },
     { "key": "pollInterval" },
     { "key": "accessories.grid" },
