@@ -84,7 +84,7 @@ The checkbox is on by default. No other fields are required:
 }
 ```
 
-At startup the plugin scans for `_pvs6._tcp` on the local network. The PVS6 broadcasts its hostname (`pvs.local`) and serial number via mDNS, so both are discovered automatically. Discovery times out after 15 seconds with an actionable error if no device is found.
+At startup the plugin scans for `_pvs6._tcp` on the local network. The PVS6 broadcasts its hostname (`pvs.local`) and serial number via mDNS, so both are discovered automatically. Discovery times out after 30 seconds with an actionable error if no device is found.
 
 If the device becomes unreachable for 2 hours (e.g. the router assigned it a new IP), the plugin runs mDNS discovery again automatically and reconnects.
 
@@ -184,7 +184,7 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 The plugin is designed to be resilient to transient PVS6 failures:
 
 - If the PVS6 is unreachable at startup, authentication retries every 30 seconds
-- If mDNS discovery times out (15 s) at startup, the platform logs an error and does not start — set `host` and `serialNumber` with `autoDiscover: false` to bypass discovery
+- If mDNS discovery times out (30 s) at startup, the platform logs an error and does not start — set `host` and `serialNumber` with `autoDiscover: false` to bypass discovery
 - If the device is unreachable for 2 hours and `autoDiscover` is not `false`, mDNS re-discovery runs automatically to pick up a changed IP or serial
 - Overlapping poll cycles are skipped — only one request is in flight at a time
 - Poll cycles are skipped (not fatal) on timeout (>10 s), JSON parse errors, or HTTP 5xx responses
