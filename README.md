@@ -2,8 +2,20 @@
 
 A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://sunstrong.com) solar monitoring system. Exposes solar production and grid metering as **Eve Energy** accessories in Apple HomeKit, with real-time power, cumulative energy, voltage, and native Eve app history.
 
----
+<table>
+  <tr>
+    <td align="center" valign="middle">
+<img width="300" alt="Eve Energy view" src="https://github.com/user-attachments/assets/f85d2e28-b419-4c41-a651-cbb88c011c79" />
+      <br><sub>Eve Energy view</sub>
+    </td>
+    <td align="center" valign="middle">
+<img width="600" alt="Total Consumption landscape" src="https://github.com/user-attachments/assets/76332baa-e1a2-45dd-a4ee-4dffac008ab8" />
+      <br><sub>Total Consumption landscape</sub>
+    </td>
+  </tr>
+</table>
 
+---
 ## Features
 
 - **Solar Production** accessory — always registered; real-time PV output (W), lifetime generation (kWh)
