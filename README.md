@@ -11,6 +11,7 @@ A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://su
 - Import and Export accessories are always registered together as a pair, making import/export history immediately readable as separate graphs
 - Up to 7 days of native power history in the Eve app via [fakegato-history](https://github.com/simont77/fakegato-history)
 - Polls the PVS6 **local** FCGI API — no SunStrong Connect, no cloud dependency
+- **Auto-discovers** the PVS6 on your local network via mDNS — no IP address or serial number required in config
 - Automatically identifies production and consumption CT meters from the PVS6 device list
 - Designed to complement [homebridge-rainforest-eagle3](https://github.com/dacarson/homebridge-rainforest-eagle3) for a complete solar + grid picture in Apple Home
 
@@ -47,10 +48,9 @@ Grid Import and Grid Export are always registered together — enabling `accesso
 
 ## Requirements
 
-- [Homebridge](https://homebridge.io) v1.6 or later
+- [Homebridge](https://homebridge.io) v2.0 or later
 - Node.js 18 or later
 - SunStrong PVS6 on the same local network as your Homebridge host
-- The PVS6's **full serial number** (printed on the unit label)
 
 ---
 
@@ -66,9 +66,11 @@ npm install -g homebridge-pvs6
 
 ## Configuration
 
-Add a platform entry to your Homebridge `config.json`:
+The Homebridge UI exposes an **Auto Discover** checkbox (on by default). When checked, the plugin finds the PVS6 on your local network automatically via mDNS — Host and Serial Number fields are ignored even if filled in. When unchecked, Host and Serial Number are used directly. Either way, both fields are always visible and their values are preserved in `config.json`.
 
-Minimal config (solar only — grid disabled):
+### Auto Discover (default)
+
+The checkbox is on by default. No other fields are required:
 
 ```json
 {
@@ -76,15 +78,19 @@ Minimal config (solar only — grid disabled):
     {
       "platform": "PVS6",
       "name": "PVS6",
-      "host": "192.168.1.x",
-      "serialNumber": "ZT231385000549A1234",
-      "accessories": { "grid": false }
+      "autoDiscover": true
     }
   ]
 }
 ```
 
-Standard config (solar + grid import/export pair):
+At startup the plugin scans for `_pvs6._tcp` on the local network. The PVS6 broadcasts its hostname (`pvs.local`) and serial number via mDNS, so both are discovered automatically. Discovery times out after 15 seconds with an actionable error if no device is found.
+
+If the device becomes unreachable for 2 hours (e.g. the router assigned it a new IP), the plugin runs mDNS discovery again automatically and reconnects.
+
+### Manual config
+
+Uncheck **Auto Discover** and supply the host and serial number directly. This skips mDNS entirely and is useful if you assign the PVS6 a static IP or DHCP reservation:
 
 ```json
 {
@@ -92,7 +98,24 @@ Standard config (solar + grid import/export pair):
     {
       "platform": "PVS6",
       "name": "PVS6",
-      "host": "192.168.1.x",
+      "autoDiscover": false,
+      "host": "pvs.local",
+      "serialNumber": "ZT231385000549A1234"
+    }
+  ]
+}
+```
+
+### Full config (all options)
+
+```json
+{
+  "platforms": [
+    {
+      "platform": "PVS6",
+      "name": "PVS6",
+      "autoDiscover": true,
+      "host": "pvs.local",
       "serialNumber": "ZT231385000549A1234",
       "pollInterval": 10,
       "solarName": "Solar Production",
@@ -108,17 +131,20 @@ Standard config (solar + grid import/export pair):
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `platform` | string | yes | — | Must be `PVS6` |
-| `host` | string | yes | — | IP address or hostname of the PVS6 on your local network |
-| `serialNumber` | string | yes | — | Full PVS6 serial number. The last 5 characters are used as the API password |
+| `autoDiscover` | boolean | no | `true` | When `true`, find the PVS6 via mDNS — `host` and `serialNumber` are ignored. Re-discovers automatically after 2 hours of unreachability |
+| `host` | string | no* | — | IP address or hostname of the PVS6. Used only when `autoDiscover` is `false` |
+| `serialNumber` | string | no* | — | Full PVS6 serial number. The last 5 characters are used as the API password. Used only when `autoDiscover` is `false` |
 | `pollInterval` | integer | no | `10` | Seconds between polls. Minimum enforced: `5` |
 | `accessories.grid` | boolean | no | `true` | Enable the Grid Import + Grid Export accessory pair. Set `false` to disable both |
 | `solarName` | string | no | `"Solar Production"` | HomeKit display name for the Solar Production accessory |
 | `gridName` | string | no | `"Grid Meter - Import"` | HomeKit display name for the Grid Import accessory |
 | `gridExportName` | string | no | `"Grid Meter - Export"` | HomeKit display name for the Grid Export accessory |
 
+\* Required when `autoDiscover` is `false`.
+
 ### Finding Your Serial Number
 
-The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It is also visible in the SunStrong Connect app. The last 5 characters of the serial number are used as the local API login password — no separate password configuration is required.
+The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It is also visible in the SunStrong Connect app and is broadcast by the PVS6 itself via mDNS (which is how Auto Discover retrieves it). The last 5 characters are used as the local API login password — no separate password configuration is required.
 
 ---
 
@@ -158,6 +184,8 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 The plugin is designed to be resilient to transient PVS6 failures:
 
 - If the PVS6 is unreachable at startup, authentication retries every 30 seconds
+- If mDNS discovery times out (15 s) at startup, the platform logs an error and does not start — set `host` and `serialNumber` with `autoDiscover: false` to bypass discovery
+- If the device is unreachable for 2 hours and `autoDiscover` is not `false`, mDNS re-discovery runs automatically to pick up a changed IP or serial
 - Overlapping poll cycles are skipped — only one request is in flight at a time
 - Poll cycles are skipped (not fatal) on timeout (>10 s), JSON parse errors, or HTTP 5xx responses
 - HTTP 5xx triggers a short backoff to avoid overwhelming the PVS6's embedded HTTP server

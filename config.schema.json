@@ -10,17 +10,23 @@
         "type": "string",
         "default": "PVS6"
       },
+      "autoDiscover": {
+        "title": "Auto Discover",
+        "type": "boolean",
+        "default": true,
+        "description": "Automatically find the PVS6 on your local network via mDNS. When enabled, Host and Serial Number are ignored. If the device becomes unreachable for 2 hours, discovery runs again automatically."
+      },
       "host": {
         "title": "Host",
         "type": "string",
-        "placeholder": "192.168.1.x",
-        "description": "IP address or hostname of the PVS6 on your local network."
+        "placeholder": "pvs.local",
+        "description": "IP address or hostname of the PVS6. Used only when Auto Discover is disabled."
       },
       "serialNumber": {
         "title": "Serial Number",
         "type": "string",
         "placeholder": "ZT231385000549F1084",
-        "description": "Full PVS6 serial number. The last 5 characters are used as the login password."
+        "description": "Full PVS6 serial number. The last 5 characters are used as the login password. Used only when Auto Discover is disabled."
       },
       "pollInterval": {
         "title": "Poll Interval (seconds)",
@@ -59,6 +65,6 @@
         "description": "HomeKit display name for the Grid Export accessory."
       }
     },
-    "required": ["host", "serialNumber"]
+    "required": []
   }
 }

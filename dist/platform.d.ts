@@ -7,7 +7,7 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     readonly eveChars: EveChars;
     readonly log: Logger;
     readonly accessories: PlatformAccessory[];
-    private readonly client;
+    private client;
     private readonly config;
     private readonly pollIntervalMs;
     private solarAccessory?;
@@ -16,10 +16,18 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private pollTimer?;
     private pollInFlight;
     private backedOff;
+    private authGeneration;
+    private lastSuccessfulPollTime;
+    private rediscovering;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
+    private resolveConfig;
     private setupAccessories;
     private getOrCreateAccessory;
+    private get discoveryEnabled();
+    private checkRediscovery;
+    private triggerRediscovery;
+    private stopPolling;
     private startAuthAndPolling;
     private startPolling;
     private enterBackoff;
