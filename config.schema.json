@@ -66,5 +66,22 @@
       }
     },
     "required": []
-  }
+  },
+  "form": [
+    { "key": "name" },
+    { "key": "autoDiscover" },
+    {
+      "key": "host",
+      "condition": { "functionBody": "return !model.autoDiscover" }
+    },
+    {
+      "key": "serialNumber",
+      "condition": { "functionBody": "return !model.autoDiscover" }
+    },
+    { "key": "pollInterval" },
+    { "key": "accessories.grid" },
+    { "key": "solarName" },
+    { "key": "gridName" },
+    { "key": "gridExportName" }
+  ]
 }
