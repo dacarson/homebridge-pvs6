@@ -1,6 +1,6 @@
 # homebridge-pvs6
 
-A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://sunstrong.com) solar monitoring system. Exposes solar production and grid metering as **Eve Energy** accessories in Apple HomeKit, with real-time power, cumulative energy, voltage, and native Eve app history.
+A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://sunstrong.com) solar monitoring system. Exposes solar production and grid metering as **Eve Energy** accessories in Apple HomeKit, with real-time power, cumulative energy, and native Eve app history.
 
 <table>
   <tr>
@@ -44,7 +44,7 @@ A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://su
 The PVS6 exposes a local HTTPS varserver API that this plugin polls on a configurable interval. It reads two data streams:
 
 - **Livedata** — aggregate solar production and net grid power computed by the PVS6
-- **Meter data** — per-phase detail from the CT meters (voltage, cumulative energy)
+- **Meter data** — per-phase detail from the CT meters (cumulative energy)
 
 The plugin automatically identifies the production meter (model suffix `p`, e.g. `PVS6M0400p`) and consumption meter (model suffix `c`, e.g. `PVS6M0400c`) from the device list.
 
