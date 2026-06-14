@@ -9,9 +9,11 @@ export interface PVS6Config extends PlatformConfig {
   serialNumber?: string;
   pollInterval?: number;
   accessories?: {
-    grid?: boolean;  // enables/disables the grid pair (Import + Export) as a unit
+    grid?: boolean;             // enables/disables the grid pair (Import + Export) as a unit
+    homeConsumption?: boolean;  // enables/disables the Home Consumption accessory (default: false)
   };
   solarName?: string;
   gridName?: string;
   gridExportName?: string;
+  homeConsumptionName?: string;
 }

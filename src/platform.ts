@@ -13,6 +13,7 @@ import { PVS6Client, HttpError } from './pvs6Client';
 import { SolarAccessory } from './solarAccessory';
 import { GridImportAccessory } from './gridImportAccessory';
 import { GridExportAccessory } from './gridExportAccessory';
+import { HomeConsumptionAccessory } from './homeConsumptionAccessory';
 import { createEveCharacteristics, EveChars } from './eveCharacteristics';
 import { discoverPVS6 } from './pvs6Discovery';
 
@@ -39,6 +40,7 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   private solarAccessory?: SolarAccessory;
   private gridImportAccessory?: GridImportAccessory;
   private gridExportAccessory?: GridExportAccessory;
+  private homeConsumptionAccessory?: HomeConsumptionAccessory;
 
   private pollTimer?: ReturnType<typeof setInterval>;
   private pollInFlight = false;
@@ -170,6 +172,19 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         serialNumber,
       );
     }
+
+    // Home Consumption is optional (default: disabled).
+    if (this.config.accessories?.homeConsumption === true) {
+      const homeName = this.config.homeConsumptionName ?? 'Home Consumption';
+      const homeUuid = this.api.hap.uuid.generate(`${serialNumber}-home`);
+      this.homeConsumptionAccessory = new HomeConsumptionAccessory(
+        this,
+        this.getOrCreateAccessory(homeUuid, homeName),
+        FakeGatoHistoryService,
+        homeName,
+        serialNumber,
+      );
+    }
   }
 
   private getOrCreateAccessory(uuid: string, displayName: string): PlatformAccessory {
@@ -278,6 +293,7 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         this.solarAccessory?.updateValues(reading);
         this.gridImportAccessory?.updateValues(reading);
         this.gridExportAccessory?.updateValues(reading);
+        this.homeConsumptionAccessory?.updateValues(reading);
       } catch (err) {
         if (err instanceof HttpError) {
           if (err.statusCode === 401) {

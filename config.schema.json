@@ -43,6 +43,12 @@
             "title": "Enable Grid Meter accessories (Import + Export pair)",
             "type": "boolean",
             "default": true
+          },
+          "homeConsumption": {
+            "title": "Enable Home Consumption accessory",
+            "type": "boolean",
+            "default": false,
+            "description": "Shows real-time site load and derived lifetime consumption energy."
           }
         }
       },
@@ -63,6 +69,12 @@
         "type": "string",
         "default": "Grid Meter - Export",
         "description": "HomeKit display name for the Grid Export accessory."
+      },
+      "homeConsumptionName": {
+        "title": "Home Consumption Accessory Display Name",
+        "type": "string",
+        "default": "Home Consumption",
+        "description": "HomeKit display name for the Home Consumption accessory."
       }
     },
     "required": []
