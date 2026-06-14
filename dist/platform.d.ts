@@ -13,6 +13,7 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private solarAccessory?;
     private gridImportAccessory?;
     private gridExportAccessory?;
+    private homeConsumptionAccessory?;
     private pollTimer?;
     private pollInFlight;
     private backedOff;

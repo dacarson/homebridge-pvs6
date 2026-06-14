@@ -8,9 +8,11 @@ export interface PVS6Config extends PlatformConfig {
     pollInterval?: number;
     accessories?: {
         grid?: boolean;
+        homeConsumption?: boolean;
     };
     solarName?: string;
     gridName?: string;
     gridExportName?: string;
+    homeConsumptionName?: string;
 }
 //# sourceMappingURL=settings.d.ts.map

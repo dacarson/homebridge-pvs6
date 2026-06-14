@@ -6,13 +6,14 @@ A Homebridge plugin that exposes SunStrong PVS6 solar monitoring data to Apple H
 
 ## Overview
 
-`homebridge-pvs6` polls the PVS6 local FCGI API and publishes up to three HomeKit accessories:
+`homebridge-pvs6` polls the PVS6 local FCGI API and publishes up to four HomeKit accessories:
 
 - **Solar Production** — always registered; current PV output, cumulative energy, voltage
 - **Grid Import** — real-time import watts (`max(0, net_p) × 1000`), imported energy, voltage
 - **Grid Export** — real-time export watts (`max(0, −net_p) × 1000`), exported energy, voltage
+- **Home Consumption** — real-time site load watts (`site_load_p × 1000`), derived lifetime consumption energy
 
-Solar Production is always registered. Grid Import and Grid Export are always registered **as a pair** — enabling one enables both. The grid pair is on by default and can be disabled with `accessories.grid: false`. The plugin runs entirely standalone — no InfluxDB, no cloud dependency, no SunStrong Connect required.
+Solar Production is always registered. Grid Import and Grid Export are always registered **as a pair** — enabling one enables both. The grid pair is on by default and can be disabled with `accessories.grid: false`. Home Consumption is optional and off by default; enable with `accessories.homeConsumption: true`. The plugin runs entirely standalone — no InfluxDB, no cloud dependency, no SunStrong Connect required.
 
 It complements `homebridge-eagle` (Rainforest EAGLE-200 grid meter): the two plugins are fully independent but sit alongside each other naturally in Apple Home and the Eve app, and share the same Eve/fakegato accessory patterns documented in *Implementation Learnings* below.
 
@@ -33,10 +34,11 @@ It complements `homebridge-eagle` (Rainforest EAGLE-200 grid meter): the two plu
 ```
 Homebridge (Node.js)
   └── homebridge-pvs6 plugin
-        ├── PVS6Client              — HTTP auth + varserver polling
-        ├── SolarAccessory          — Eve Energy + fakegato history
-        ├── GridImportAccessory     — Eve Energy + fakegato history
-        └── GridExportAccessory     — Eve Energy + fakegato history (optional)
+        ├── PVS6Client                  — HTTP auth + varserver polling
+        ├── SolarAccessory              — Eve Energy + fakegato history
+        ├── GridImportAccessory         — Eve Energy + fakegato history
+        ├── GridExportAccessory         — Eve Energy + fakegato history (optional)
+        └── HomeConsumptionAccessory    — Eve Energy + fakegato history (optional)
 ```
 
 ### PVS6Client
@@ -61,7 +63,7 @@ Handles all communication with the PVS6:
 | `pv_en` | Solar cumulative energy | kWh |
 | `net_p` | Net grid power (+ = import, − = export) | kW |
 | `net_en` | Net grid cumulative energy | kWh |
-| `site_load_p` | Total site load | kW |
+| `site_load_p` | Total site load (home consumption) | kW |
 
 #### Meter endpoint (`/sys/devices/12/meter/data`)
 
@@ -152,6 +154,40 @@ Registered together with Grid Import as part of the grid pair (unless `accessori
 
 ---
 
+### Home Consumption Accessory
+
+Optional accessory (disabled by default; enable with `accessories.homeConsumption: true`). Shows real-time site load watts and derived lifetime consumption energy.
+
+**Accessory type:** Eve Energy — custom Eve Energy service (`E863F10A-079E-48FF-8F27-9C2605A29F52`), as for the other accessories above.
+
+**Display name (configurable):** `homeConsumptionName` (default: `"Home Consumption"`)
+
+**Platform accessory UUID:** `hap.uuid.generate(serialNumber + '-home')`
+
+| Characteristic | HAP UUID | Source | Notes |
+|---|---|---|---|
+| `On` (read-only) | `00000025` | `site_load_p > 0` | On = consuming power. No-op setter reverts to polled state. Always true in practice. |
+| `OutletInUse` | `00000026` | always `true` | Required by Eve Energy |
+| Eve Watt | `E863F10D` | `site_load_p × 1000` | Real-time site load in W, direct from livedata |
+| Eve kWh | `E863F10C` | `pv_en + posLtea3phsumKwh − negLtea3phsumKwh` | Derived lifetime consumption. See note below. |
+| `Name` | `00000023` | config `homeConsumptionName` | |
+
+**Derived energy note:** There is no direct "total home consumption" field on the PVS6. Lifetime consumption is calculated as:
+
+```
+home_consumption_kWh = pv_en + posLtea3phsumKwh − negLtea3phsumKwh
+```
+
+This is exact in the absence of a battery (no energy storage in scope for v1): all solar either goes to the home or is exported, so `pv_en − negLtea3phsumKwh` is the solar energy consumed on-site, and `posLtea3phsumKwh` is the grid energy consumed. All three source fields are already present in the existing livedata and mdata caches — no additional API calls are required.
+
+The derived value may accumulate minor drift over very long timeframes due to polling-interval gaps during high-power transients. For a HomeKit display accessory this is acceptable.
+
+**fakegato history:** Records `{ time, power }` (W, always non-negative) at each poll.
+
+**Apple Home tile:** Shows as a smart plug. `On` = house is consuming power (always). Wattage in detail view. Eve app shows consumption history.
+
+---
+
 ## Configuration
 
 Configured via `config.json` in the Homebridge `platforms` array.
@@ -183,6 +219,26 @@ Standard config (solar + grid pair):
 }
 ```
 
+Full config (solar + grid pair + home consumption):
+
+```json
+{
+  "platform": "PVS6",
+  "name": "PVS6",
+  "host": "192.168.1.x",
+  "serialNumber": "ABCDE12345",
+  "pollInterval": 10,
+  "solarName": "Solar Production",
+  "gridName": "Grid Meter - Import",
+  "gridExportName": "Grid Meter - Export",
+  "accessories": {
+    "grid": true,
+    "homeConsumption": true
+  },
+  "homeConsumptionName": "Home Consumption"
+}
+```
+
 ### Config schema (`config.schema.json`)
 
 | Field | Type | Required | Default | Description |
@@ -191,9 +247,11 @@ Standard config (solar + grid pair):
 | `serialNumber` | string | yes | — | Full PVS6 serial number (password = last 5 chars) |
 | `pollInterval` | integer | no | `10` | Seconds between polls. Minimum enforced: `5` |
 | `accessories.grid` | boolean | no | `true` | Enable the Grid Import + Grid Export accessory pair. Set `false` to disable both |
+| `accessories.homeConsumption` | boolean | no | `false` | Enable the Home Consumption accessory. Opt-in; off by default |
 | `solarName` | string | no | `"Solar Production"` | HomeKit display name for solar accessory |
 | `gridName` | string | no | `"Grid Meter - Import"` | HomeKit display name for grid import accessory |
 | `gridExportName` | string | no | `"Grid Meter - Export"` | HomeKit display name for grid export accessory |
+| `homeConsumptionName` | string | no | `"Home Consumption"` | HomeKit display name for home consumption accessory |
 
 ---
 
@@ -243,13 +301,14 @@ Uses [`fakegato-history`](https://github.com/simont77/fakegato-history) npm pack
 ```
 homebridge-pvs6/
 ├── src/
-│   ├── index.ts                  — Homebridge platform registration
-│   ├── platform.ts               — PVS6Platform class, accessory lifecycle
-│   ├── pvs6Client.ts             — HTTP auth + polling logic
-│   ├── solarAccessory.ts         — Solar HomeKit accessory
-│   ├── gridImportAccessory.ts    — Grid Import HomeKit accessory
-│   ├── gridExportAccessory.ts    — Grid Export HomeKit accessory (optional)
-│   └── eveCharacteristics.ts     — Eve custom UUID definitions
+│   ├── index.ts                        — Homebridge platform registration
+│   ├── platform.ts                     — PVS6Platform class, accessory lifecycle
+│   ├── pvs6Client.ts                   — HTTP auth + polling logic
+│   ├── solarAccessory.ts               — Solar HomeKit accessory
+│   ├── gridImportAccessory.ts          — Grid Import HomeKit accessory
+│   ├── gridExportAccessory.ts          — Grid Export HomeKit accessory (optional)
+│   ├── homeConsumptionAccessory.ts     — Home Consumption HomeKit accessory (optional)
+│   └── eveCharacteristics.ts           — Eve custom UUID definitions
 ├── config.schema.json
 ├── package.json
 ├── tsconfig.json
@@ -283,7 +342,6 @@ Node.js ≥ 18 required (for native `fetch` as an alternative to a HTTP library)
 
 ## Future Considerations
 
-- `site_load_p` as a third optional accessory (derived: solar + grid import − export)
 - Per-leg current characteristics for grid accessory (L1/L2 split)
 - Prometheus metrics endpoint on a configurable port (optional sidecar)
 - HACS-style Homebridge UI config page via `homebridge-config-ui-x` schema extensions

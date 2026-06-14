@@ -5,6 +5,8 @@ export interface PVS6Reading {
     netPowerW: number;
     gridImportKWh: number;
     gridExportKWh: number;
+    siteLoadPowerW: number;
+    homeConsumptionKWh: number;
 }
 export declare class HttpError extends Error {
     readonly statusCode: number;

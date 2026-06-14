@@ -6,6 +6,7 @@ const pvs6Client_1 = require("./pvs6Client");
 const solarAccessory_1 = require("./solarAccessory");
 const gridImportAccessory_1 = require("./gridImportAccessory");
 const gridExportAccessory_1 = require("./gridExportAccessory");
+const homeConsumptionAccessory_1 = require("./homeConsumptionAccessory");
 const eveCharacteristics_1 = require("./eveCharacteristics");
 const pvs6Discovery_1 = require("./pvs6Discovery");
 const MIN_POLL_INTERVAL = 5;
@@ -103,6 +104,12 @@ class PVS6Platform {
             const exportName = this.config.gridExportName ?? 'Grid Meter - Export';
             const exportUuid = this.api.hap.uuid.generate(`${serialNumber}-grid-export`);
             this.gridExportAccessory = new gridExportAccessory_1.GridExportAccessory(this, this.getOrCreateAccessory(exportUuid, exportName), FakeGatoHistoryService, exportName, serialNumber);
+        }
+        // Home Consumption is optional (default: disabled).
+        if (this.config.accessories?.homeConsumption === true) {
+            const homeName = this.config.homeConsumptionName ?? 'Home Consumption';
+            const homeUuid = this.api.hap.uuid.generate(`${serialNumber}-home`);
+            this.homeConsumptionAccessory = new homeConsumptionAccessory_1.HomeConsumptionAccessory(this, this.getOrCreateAccessory(homeUuid, homeName), FakeGatoHistoryService, homeName, serialNumber);
         }
     }
     getOrCreateAccessory(uuid, displayName) {
@@ -209,6 +216,7 @@ class PVS6Platform {
                 this.solarAccessory?.updateValues(reading);
                 this.gridImportAccessory?.updateValues(reading);
                 this.gridExportAccessory?.updateValues(reading);
+                this.homeConsumptionAccessory?.updateValues(reading);
             }
             catch (err) {
                 if (err instanceof pvs6Client_1.HttpError) {

@@ -20,6 +20,7 @@ A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://su
 
 - **Solar Production** accessory — always registered; real-time PV output (W), lifetime generation (kWh)
 - **Grid Import + Grid Export** accessory pair — optional (default enabled); each shows non-negative watts and its own Eve app history
+- **Home Consumption** accessory — optional (default disabled); real-time site load (W) and derived lifetime consumption (kWh)
 - Import and Export accessories are always registered together as a pair, making import/export history immediately readable as separate graphs
 - Up to 7 days of native power history in the Eve app via [fakegato-history](https://github.com/simont77/fakegato-history)
 - Polls the PVS6 **local** FCGI API — no SunStrong Connect, no cloud dependency
@@ -53,8 +54,9 @@ All accessories render as **smart plugs** in Apple Home:
 - **Solar Production** — always registered; `On` when the panels are producing power
 - **Grid Import** — `On` when importing from the grid; zero watts when net-exporting
 - **Grid Export** — `On` when net-exporting solar to the grid; zero watts when importing
+- **Home Consumption** — optional; `On` when the house is drawing power (always true in practice); shows total site load and derived lifetime consumption energy
 
-Grid Import and Grid Export are always registered together — enabling `accessories.grid` creates both.
+Grid Import and Grid Export are always registered together — enabling `accessories.grid` creates both. Home Consumption is opt-in via `accessories.homeConsumption: true`.
 
 ---
 
@@ -130,9 +132,14 @@ Uncheck **Auto Discover** and supply the host and serial number directly. This s
       "host": "pvs.local",
       "serialNumber": "ZT231385000549A1234",
       "pollInterval": 10,
+      "accessories": {
+        "grid": true,
+        "homeConsumption": true
+      },
       "solarName": "Solar Production",
       "gridName": "Grid Meter - Import",
-      "gridExportName": "Grid Meter - Export"
+      "gridExportName": "Grid Meter - Export",
+      "homeConsumptionName": "Home Consumption"
     }
   ]
 }
@@ -148,9 +155,11 @@ Uncheck **Auto Discover** and supply the host and serial number directly. This s
 | `serialNumber` | string | no* | — | Full PVS6 serial number. The last 5 characters are used as the API password. Used only when `autoDiscover` is `false` |
 | `pollInterval` | integer | no | `10` | Seconds between polls. Minimum enforced: `5` |
 | `accessories.grid` | boolean | no | `true` | Enable the Grid Import + Grid Export accessory pair. Set `false` to disable both |
+| `accessories.homeConsumption` | boolean | no | `false` | Enable the Home Consumption accessory. Opt-in; off by default |
 | `solarName` | string | no | `"Solar Production"` | HomeKit display name for the Solar Production accessory |
 | `gridName` | string | no | `"Grid Meter - Import"` | HomeKit display name for the Grid Import accessory |
 | `gridExportName` | string | no | `"Grid Meter - Export"` | HomeKit display name for the Grid Export accessory |
+| `homeConsumptionName` | string | no | `"Home Consumption"` | HomeKit display name for the Home Consumption accessory |
 
 \* Required when `autoDiscover` is `false`.
 
@@ -188,6 +197,19 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 | OutletInUse | Always `true` | Required by Eve Energy |
 | Eve Watts | `max(0, −net_p) × 1000` | Export watts; zero when importing |
 | Eve kWh | `negLtea3phsumKwh` | Lifetime exported energy from consumption CT meter |
+
+### Home Consumption *(optional — enable with `accessories.homeConsumption: true`)*
+
+Shows the total real-time load of the home and a derived lifetime consumption figure. Enable via `accessories.homeConsumption: true` in config.
+
+| Characteristic | Source | Notes |
+|---|---|---|
+| On | `site_load_p > 0` | True when the house is drawing power (always true in practice) |
+| OutletInUse | Always `true` | Required by Eve Energy |
+| Eve Watts | `site_load_p × 1000` | Real-time site load in Watts |
+| Eve kWh | `pv_en + posLtea3phsumKwh − negLtea3phsumKwh` | Derived lifetime consumption — all solar generated, plus grid imported, minus grid exported |
+
+The derived kWh formula is exact without a battery: solar energy either goes to the home or the grid, so `pv_en − negLtea3phsumKwh` is the on-site solar consumed and `posLtea3phsumKwh` is the grid energy consumed. All three values already come from the existing livedata and meter caches — no additional API calls are required.
 
 ---
 

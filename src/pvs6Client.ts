@@ -3,11 +3,13 @@ import * as http from 'http';
 import { Logger } from 'homebridge';
 
 export interface PVS6Reading {
-  pvPowerW: number;        // solar production in W (from livedata pv_p * 1000)
-  pvEnergyKWh: number;    // solar cumulative kWh (from livedata pv_en)
-  netPowerW: number;      // net grid W, positive = importing, negative = exporting (net_p * 1000)
-  gridImportKWh: number;  // lifetime imported kWh (from consumption meter posLtea3phsumKwh)
-  gridExportKWh: number;  // lifetime exported kWh (from consumption meter negLtea3phsumKwh)
+  pvPowerW: number;             // solar production in W (from livedata pv_p * 1000)
+  pvEnergyKWh: number;         // solar cumulative kWh (from livedata pv_en)
+  netPowerW: number;           // net grid W, positive = importing, negative = exporting (net_p * 1000)
+  gridImportKWh: number;       // lifetime imported kWh (from consumption meter posLtea3phsumKwh)
+  gridExportKWh: number;       // lifetime exported kWh (from consumption meter negLtea3phsumKwh)
+  siteLoadPowerW: number;      // total site load in W (from livedata site_load_p * 1000)
+  homeConsumptionKWh: number;  // derived lifetime consumption kWh (pvEnergyKWh + gridImportKWh - gridExportKWh)
 }
 
 export class HttpError extends Error {
@@ -37,6 +39,8 @@ export class PVS6Client {
     netPowerW: 0,
     gridImportKWh: 0,
     gridExportKWh: 0,
+    siteLoadPowerW: 0,
+    homeConsumptionKWh: 0,
   };
 
   private static readonly MIN_INTERVAL_MS = 5000;
@@ -160,6 +164,7 @@ export class PVS6Client {
     const pvPowerKW = this.num(livedata['/sys/livedata/pv_p'], 'pv_p');
     const pvEnergyKWh = this.num(livedata['/sys/livedata/pv_en'], 'pv_en');
     const netPowerKW = this.num(livedata['/sys/livedata/net_p'], 'net_p');
+    const siteLoadPowerKW = this.num(livedata['/sys/livedata/site_load_p'], 'site_load_p');
     const gridImportKWhRaw = consIdx !== null
       ? this.num(mdata[`/sys/devices/meter/${consIdx}/posLtea3phsumKwh`], 'cons.posLtea3phsumKwh')
       : null;
@@ -167,12 +172,18 @@ export class PVS6Client {
       ? this.num(mdata[`/sys/devices/meter/${consIdx}/negLtea3phsumKwh`], 'cons.negLtea3phsumKwh')
       : null;
 
+    const resolvedPvEnergyKWh = pvEnergyKWh ?? last.pvEnergyKWh;
+    const resolvedGridImportKWh = gridImportKWhRaw ?? last.gridImportKWh;
+    const resolvedGridExportKWh = gridExportKWhRaw ?? last.gridExportKWh;
+
     const reading: PVS6Reading = {
       pvPowerW: pvPowerKW !== null ? Math.round(pvPowerKW * 1000 * 10) / 10 : last.pvPowerW,
-      pvEnergyKWh: pvEnergyKWh ?? last.pvEnergyKWh,
+      pvEnergyKWh: resolvedPvEnergyKWh,
       netPowerW: netPowerKW !== null ? Math.round(netPowerKW * 1000 * 10) / 10 : last.netPowerW,
-      gridImportKWh: gridImportKWhRaw ?? last.gridImportKWh,
-      gridExportKWh: gridExportKWhRaw ?? last.gridExportKWh,
+      gridImportKWh: resolvedGridImportKWh,
+      gridExportKWh: resolvedGridExportKWh,
+      siteLoadPowerW: siteLoadPowerKW !== null ? Math.round(siteLoadPowerKW * 1000 * 10) / 10 : last.siteLoadPowerW,
+      homeConsumptionKWh: resolvedPvEnergyKWh + resolvedGridImportKWh - resolvedGridExportKWh,
     };
 
     this.lastReading = reading;

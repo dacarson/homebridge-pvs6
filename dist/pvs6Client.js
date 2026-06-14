@@ -60,6 +60,8 @@ class PVS6Client {
             netPowerW: 0,
             gridImportKWh: 0,
             gridExportKWh: 0,
+            siteLoadPowerW: 0,
+            homeConsumptionKWh: 0,
         };
     }
     get password() {
@@ -162,18 +164,24 @@ class PVS6Client {
         const pvPowerKW = this.num(livedata['/sys/livedata/pv_p'], 'pv_p');
         const pvEnergyKWh = this.num(livedata['/sys/livedata/pv_en'], 'pv_en');
         const netPowerKW = this.num(livedata['/sys/livedata/net_p'], 'net_p');
+        const siteLoadPowerKW = this.num(livedata['/sys/livedata/site_load_p'], 'site_load_p');
         const gridImportKWhRaw = consIdx !== null
             ? this.num(mdata[`/sys/devices/meter/${consIdx}/posLtea3phsumKwh`], 'cons.posLtea3phsumKwh')
             : null;
         const gridExportKWhRaw = consIdx !== null
             ? this.num(mdata[`/sys/devices/meter/${consIdx}/negLtea3phsumKwh`], 'cons.negLtea3phsumKwh')
             : null;
+        const resolvedPvEnergyKWh = pvEnergyKWh ?? last.pvEnergyKWh;
+        const resolvedGridImportKWh = gridImportKWhRaw ?? last.gridImportKWh;
+        const resolvedGridExportKWh = gridExportKWhRaw ?? last.gridExportKWh;
         const reading = {
             pvPowerW: pvPowerKW !== null ? Math.round(pvPowerKW * 1000 * 10) / 10 : last.pvPowerW,
-            pvEnergyKWh: pvEnergyKWh ?? last.pvEnergyKWh,
+            pvEnergyKWh: resolvedPvEnergyKWh,
             netPowerW: netPowerKW !== null ? Math.round(netPowerKW * 1000 * 10) / 10 : last.netPowerW,
-            gridImportKWh: gridImportKWhRaw ?? last.gridImportKWh,
-            gridExportKWh: gridExportKWhRaw ?? last.gridExportKWh,
+            gridImportKWh: resolvedGridImportKWh,
+            gridExportKWh: resolvedGridExportKWh,
+            siteLoadPowerW: siteLoadPowerKW !== null ? Math.round(siteLoadPowerKW * 1000 * 10) / 10 : last.siteLoadPowerW,
+            homeConsumptionKWh: resolvedPvEnergyKWh + resolvedGridImportKWh - resolvedGridExportKWh,
         };
         this.lastReading = reading;
         return reading;
