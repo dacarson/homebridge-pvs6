@@ -22,6 +22,7 @@ const AUTH_RETRY_MS = 30_000;
 const AUTH_BACKOFF_MS = 60_000;
 const OVERLOAD_BACKOFF_MS = 15_000;
 const REDISCOVERY_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+const NETWORK_ERROR_LOG_INTERVAL_MS = 5 * 60 * 1000; // suppress repeat network error logs within 5 min
 
 export class PVS6Platform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -46,6 +47,7 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   private pollInFlight = false;
   private backedOff = false;
   private consecutiveNetworkErrors = 0;
+  private lastNetworkErrorLogTime = 0;
 
   // Incremented when re-discovery fires so stale auth-retry timeouts know to abort.
   private authGeneration = 0;
@@ -292,6 +294,7 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         const reading = await this.client.poll();
         this.lastSuccessfulPollTime = Date.now();
         this.consecutiveNetworkErrors = 0;
+        this.lastNetworkErrorLogTime = 0;
         this.solarAccessory?.updateValues(reading);
         this.gridImportAccessory?.updateValues(reading);
         this.gridExportAccessory?.updateValues(reading);
@@ -312,8 +315,10 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         } else if (err instanceof Error) {
           if (err.message.includes('timeout') || err.message.includes('socket hang up') || err.message.includes('ECONNRESET')) {
             this.consecutiveNetworkErrors++;
-            if (this.consecutiveNetworkErrors === 1) {
+            const now = Date.now();
+            if (now - this.lastNetworkErrorLogTime > NETWORK_ERROR_LOG_INTERVAL_MS) {
               this.log.warn(`Poll network error: ${err.message}`);
+              this.lastNetworkErrorLogTime = now;
             }
             if (this.consecutiveNetworkErrors >= 3) {
               this.log.warn(`${this.consecutiveNetworkErrors} consecutive network errors — re-authenticating...`);

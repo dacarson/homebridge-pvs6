@@ -18,6 +18,7 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private pollInFlight;
     private backedOff;
     private consecutiveNetworkErrors;
+    private lastNetworkErrorLogTime;
     private authGeneration;
     private lastSuccessfulPollTime;
     private rediscovering;
