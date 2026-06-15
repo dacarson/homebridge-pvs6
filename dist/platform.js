@@ -217,7 +217,6 @@ class PVS6Platform {
                 const reading = await this.client.poll();
                 this.lastSuccessfulPollTime = Date.now();
                 this.consecutiveNetworkErrors = 0;
-                this.lastNetworkErrorLogTime = 0;
                 this.solarAccessory?.updateValues(reading);
                 this.gridImportAccessory?.updateValues(reading);
                 this.gridExportAccessory?.updateValues(reading);
@@ -280,8 +279,10 @@ class PVS6Platform {
     enterBackoff(durationMs) {
         this.backedOff = true;
         setTimeout(() => {
+            if (this.backedOff) {
+                this.log.info('Backoff period ended — resuming polls');
+            }
             this.backedOff = false;
-            this.log.info('Backoff period ended — resuming polls');
         }, durationMs);
     }
 }
