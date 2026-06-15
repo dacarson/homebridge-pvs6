@@ -19,6 +19,7 @@ class PVS6Platform {
         this.accessories = [];
         this.pollInFlight = false;
         this.backedOff = false;
+        this.consecutiveNetworkErrors = 0;
         // Incremented when re-discovery fires so stale auth-retry timeouts know to abort.
         this.authGeneration = 0;
         // Tracks when the last successful poll data was received, for re-discovery gating.
@@ -213,6 +214,7 @@ class PVS6Platform {
             try {
                 const reading = await this.client.poll();
                 this.lastSuccessfulPollTime = Date.now();
+                this.consecutiveNetworkErrors = 0;
                 this.solarAccessory?.updateValues(reading);
                 this.gridImportAccessory?.updateValues(reading);
                 this.gridExportAccessory?.updateValues(reading);
@@ -222,18 +224,12 @@ class PVS6Platform {
                 if (err instanceof pvs6Client_1.HttpError) {
                     if (err.statusCode === 401) {
                         this.log.warn('HTTP 401 — session expired, re-authenticating...');
-                        this.enterBackoff(AUTH_BACKOFF_MS);
-                        this.client.authenticate()
-                            .then(() => {
-                            this.log.info('Re-authenticated — resuming polls');
-                            this.backedOff = false;
-                        })
-                            .catch((authErr) => {
-                            this.log.error(`Re-auth failed: ${authErr.message}. Backing off ${AUTH_BACKOFF_MS / 1000}s`);
-                        });
+                        this.consecutiveNetworkErrors = 0;
+                        this.triggerReauth();
                     }
                     else if (err.statusCode >= 500) {
                         this.log.warn(`HTTP ${err.statusCode} from PVS6 — device may be overloaded. Backing off ${OVERLOAD_BACKOFF_MS / 1000}s`);
+                        this.consecutiveNetworkErrors = 0;
                         this.enterBackoff(OVERLOAD_BACKOFF_MS);
                     }
                     else {
@@ -241,8 +237,16 @@ class PVS6Platform {
                     }
                 }
                 else if (err instanceof Error) {
-                    if (err.message.includes('timeout')) {
-                        this.log.warn('Poll timed out — skipping cycle');
+                    if (err.message.includes('timeout') || err.message.includes('socket hang up') || err.message.includes('ECONNRESET')) {
+                        this.consecutiveNetworkErrors++;
+                        if (this.consecutiveNetworkErrors === 1) {
+                            this.log.warn(`Poll network error: ${err.message}`);
+                        }
+                        if (this.consecutiveNetworkErrors >= 3) {
+                            this.log.warn(`${this.consecutiveNetworkErrors} consecutive network errors — re-authenticating...`);
+                            this.consecutiveNetworkErrors = 0;
+                            this.triggerReauth();
+                        }
                     }
                     else if (err.message.includes('JSON parse')) {
                         this.log.warn(`${err.message}`);
@@ -256,6 +260,17 @@ class PVS6Platform {
                 this.pollInFlight = false;
             }
         }, this.pollIntervalMs);
+    }
+    triggerReauth() {
+        this.enterBackoff(AUTH_BACKOFF_MS);
+        this.client.authenticate()
+            .then(() => {
+            this.log.info('Re-authenticated — resuming polls');
+            this.backedOff = false;
+        })
+            .catch((authErr) => {
+            this.log.error(`Re-auth failed: ${authErr.message}. Backing off ${AUTH_BACKOFF_MS / 1000}s`);
+        });
     }
     enterBackoff(durationMs) {
         this.backedOff = true;
