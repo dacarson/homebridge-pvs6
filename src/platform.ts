@@ -15,13 +15,15 @@ import { GridImportAccessory } from './gridImportAccessory';
 import { GridExportAccessory } from './gridExportAccessory';
 import { HomeConsumptionAccessory } from './homeConsumptionAccessory';
 import { createEveCharacteristics, EveChars } from './eveCharacteristics';
-import { discoverPVS6 } from './pvs6Discovery';
+import { discoverPVS6, PVS6DiscoveryResult } from './pvs6Discovery';
+import { loadDiscoveryCache, saveDiscoveryCache } from './pvs6DiscoveryCache';
 
 const MIN_POLL_INTERVAL = 5;
 const AUTH_RETRY_MS = 30_000;
 const AUTH_BACKOFF_MS = 60_000;
 const OVERLOAD_BACKOFF_MS = 15_000;
 const REDISCOVERY_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+const NETWORK_ERROR_LOG_INTERVAL_MS = 5 * 60 * 1000; // suppress repeat network error logs within 5 min
 
 export class PVS6Platform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -45,6 +47,8 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   private pollTimer?: ReturnType<typeof setInterval>;
   private pollInFlight = false;
   private backedOff = false;
+  private consecutiveNetworkErrors = 0;
+  private lastNetworkErrorLogTime = 0;
 
   // Incremented when re-discovery fires so stale auth-retry timeouts know to abort.
   private authGeneration = 0;
@@ -109,6 +113,11 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   // autoDiscover: true  → always run mDNS discovery; host/serialNumber in config are ignored.
   // autoDiscover: false → must supply both host and serialNumber manually; no mDNS.
   // autoDiscover: unset → use config values if both are present, otherwise discover what's missing.
+  //
+  // Discovery results are cached to disk: once mDNS finds the PVS6, subsequent startups reuse
+  // the cached host/serialNumber and skip mDNS entirely. If the cached IP turns out to be stale
+  // (device unreachable), the existing re-discovery flow (checkRediscovery/triggerRediscovery)
+  // takes over and refreshes the cache once mDNS finds it again.
   private async resolveConfig(): Promise<{ host: string; serialNumber: string }> {
     const { host, serialNumber, autoDiscover } = this.config;
 
@@ -120,18 +129,30 @@ export class PVS6Platform implements DynamicPlatformPlugin {
     }
 
     if (autoDiscover === true) {
-      return discoverPVS6(this.log);
+      return this.discoverWithCache();
     }
 
     // autoDiscover not set: use config if complete, otherwise discover what's missing.
     if (host && serialNumber) {
       return { host, serialNumber };
     }
-    const discovered = await discoverPVS6(this.log);
+    const discovered = await this.discoverWithCache();
     return {
       host: host ?? discovered.host,
       serialNumber: serialNumber ?? discovered.serialNumber,
     };
+  }
+
+  // Returns the cached discovery result if one exists, otherwise runs mDNS discovery and caches it.
+  private async discoverWithCache(): Promise<PVS6DiscoveryResult> {
+    const cached = loadDiscoveryCache(this.api, this.log);
+    if (cached) {
+      this.log.info(`Using cached PVS6 location: ${cached.host} (serial: ${cached.serialNumber}) — skipping mDNS discovery`);
+      return cached;
+    }
+    const discovered = await discoverPVS6(this.log);
+    saveDiscoveryCache(this.api, this.log, discovered);
+    return discovered;
   }
 
   private setupAccessories(
@@ -226,6 +247,8 @@ export class PVS6Platform implements DynamicPlatformPlugin {
     try {
       const { host, serialNumber } = await discoverPVS6(this.log);
       this.log.info(`Re-discovery found PVS6 at ${host} (serial: ${serialNumber}) — reconnecting`);
+      // Refresh the cache so the next startup picks up the new address directly.
+      saveDiscoveryCache(this.api, this.log, { host, serialNumber });
       // Increment generation to cancel any pending auth-retry timeouts.
       this.authGeneration++;
       this.stopPolling();
@@ -290,6 +313,7 @@ export class PVS6Platform implements DynamicPlatformPlugin {
       try {
         const reading = await this.client.poll();
         this.lastSuccessfulPollTime = Date.now();
+        this.consecutiveNetworkErrors = 0;
         this.solarAccessory?.updateValues(reading);
         this.gridImportAccessory?.updateValues(reading);
         this.gridExportAccessory?.updateValues(reading);
@@ -298,24 +322,28 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         if (err instanceof HttpError) {
           if (err.statusCode === 401) {
             this.log.warn('HTTP 401 — session expired, re-authenticating...');
-            this.enterBackoff(AUTH_BACKOFF_MS);
-            this.client.authenticate()
-              .then(() => {
-                this.log.info('Re-authenticated — resuming polls');
-                this.backedOff = false;
-              })
-              .catch((authErr: Error) => {
-                this.log.error(`Re-auth failed: ${authErr.message}. Backing off ${AUTH_BACKOFF_MS / 1000}s`);
-              });
+            this.consecutiveNetworkErrors = 0;
+            this.triggerReauth();
           } else if (err.statusCode >= 500) {
             this.log.warn(`HTTP ${err.statusCode} from PVS6 — device may be overloaded. Backing off ${OVERLOAD_BACKOFF_MS / 1000}s`);
+            this.consecutiveNetworkErrors = 0;
             this.enterBackoff(OVERLOAD_BACKOFF_MS);
           } else {
             this.log.warn(`Poll HTTP error: ${err.message}`);
           }
         } else if (err instanceof Error) {
-          if (err.message.includes('timeout')) {
-            this.log.warn('Poll timed out — skipping cycle');
+          if (err.message.includes('timeout') || err.message.includes('socket hang up') || err.message.includes('ECONNRESET')) {
+            this.consecutiveNetworkErrors++;
+            const now = Date.now();
+            if (now - this.lastNetworkErrorLogTime > NETWORK_ERROR_LOG_INTERVAL_MS) {
+              this.log.warn(`Poll network error: ${err.message}`);
+              this.lastNetworkErrorLogTime = now;
+            }
+            if (this.consecutiveNetworkErrors >= 3) {
+              this.log.warn(`${this.consecutiveNetworkErrors} consecutive network errors — re-authenticating...`);
+              this.consecutiveNetworkErrors = 0;
+              this.triggerReauth();
+            }
           } else if (err.message.includes('JSON parse')) {
             this.log.warn(`${err.message}`);
           } else {
@@ -328,11 +356,25 @@ export class PVS6Platform implements DynamicPlatformPlugin {
     }, this.pollIntervalMs);
   }
 
+  private triggerReauth(): void {
+    this.enterBackoff(AUTH_BACKOFF_MS);
+    this.client.authenticate()
+      .then(() => {
+        this.log.info('Re-authenticated — resuming polls');
+        this.backedOff = false;
+      })
+      .catch((authErr: Error) => {
+        this.log.error(`Re-auth failed: ${authErr.message}. Backing off ${AUTH_BACKOFF_MS / 1000}s`);
+      });
+  }
+
   private enterBackoff(durationMs: number): void {
     this.backedOff = true;
     setTimeout(() => {
+      if (this.backedOff) {
+        this.log.info('Backoff period ended — resuming polls');
+      }
       this.backedOff = false;
-      this.log.info('Backoff period ended — resuming polls');
     }, durationMs);
   }
 }

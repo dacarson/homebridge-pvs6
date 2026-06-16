@@ -17,12 +17,15 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private pollTimer?;
     private pollInFlight;
     private backedOff;
+    private consecutiveNetworkErrors;
+    private lastNetworkErrorLogTime;
     private authGeneration;
     private lastSuccessfulPollTime;
     private rediscovering;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
     private resolveConfig;
+    private discoverWithCache;
     private setupAccessories;
     private getOrCreateAccessory;
     private get discoveryEnabled();
@@ -31,6 +34,7 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private stopPolling;
     private startAuthAndPolling;
     private startPolling;
+    private triggerReauth;
     private enterBackoff;
 }
 //# sourceMappingURL=platform.d.ts.map
