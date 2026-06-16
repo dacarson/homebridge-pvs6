@@ -9,6 +9,7 @@ const gridExportAccessory_1 = require("./gridExportAccessory");
 const homeConsumptionAccessory_1 = require("./homeConsumptionAccessory");
 const eveCharacteristics_1 = require("./eveCharacteristics");
 const pvs6Discovery_1 = require("./pvs6Discovery");
+const pvs6DiscoveryCache_1 = require("./pvs6DiscoveryCache");
 const MIN_POLL_INTERVAL = 5;
 const AUTH_RETRY_MS = 30000;
 const AUTH_BACKOFF_MS = 60000;
@@ -71,6 +72,11 @@ class PVS6Platform {
     // autoDiscover: true  → always run mDNS discovery; host/serialNumber in config are ignored.
     // autoDiscover: false → must supply both host and serialNumber manually; no mDNS.
     // autoDiscover: unset → use config values if both are present, otherwise discover what's missing.
+    //
+    // Discovery results are cached to disk: once mDNS finds the PVS6, subsequent startups reuse
+    // the cached host/serialNumber and skip mDNS entirely. If the cached IP turns out to be stale
+    // (device unreachable), the existing re-discovery flow (checkRediscovery/triggerRediscovery)
+    // takes over and refreshes the cache once mDNS finds it again.
     async resolveConfig() {
         const { host, serialNumber, autoDiscover } = this.config;
         if (autoDiscover === false) {
@@ -80,17 +86,28 @@ class PVS6Platform {
             return { host, serialNumber };
         }
         if (autoDiscover === true) {
-            return (0, pvs6Discovery_1.discoverPVS6)(this.log);
+            return this.discoverWithCache();
         }
         // autoDiscover not set: use config if complete, otherwise discover what's missing.
         if (host && serialNumber) {
             return { host, serialNumber };
         }
-        const discovered = await (0, pvs6Discovery_1.discoverPVS6)(this.log);
+        const discovered = await this.discoverWithCache();
         return {
             host: host ?? discovered.host,
             serialNumber: serialNumber ?? discovered.serialNumber,
         };
+    }
+    // Returns the cached discovery result if one exists, otherwise runs mDNS discovery and caches it.
+    async discoverWithCache() {
+        const cached = (0, pvs6DiscoveryCache_1.loadDiscoveryCache)(this.api, this.log);
+        if (cached) {
+            this.log.info(`Using cached PVS6 location: ${cached.host} (serial: ${cached.serialNumber}) — skipping mDNS discovery`);
+            return cached;
+        }
+        const discovered = await (0, pvs6Discovery_1.discoverPVS6)(this.log);
+        (0, pvs6DiscoveryCache_1.saveDiscoveryCache)(this.api, this.log, discovered);
+        return discovered;
     }
     setupAccessories(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -152,6 +169,8 @@ class PVS6Platform {
         try {
             const { host, serialNumber } = await (0, pvs6Discovery_1.discoverPVS6)(this.log);
             this.log.info(`Re-discovery found PVS6 at ${host} (serial: ${serialNumber}) — reconnecting`);
+            // Refresh the cache so the next startup picks up the new address directly.
+            (0, pvs6DiscoveryCache_1.saveDiscoveryCache)(this.api, this.log, { host, serialNumber });
             // Increment generation to cancel any pending auth-retry timeouts.
             this.authGeneration++;
             this.stopPolling();

@@ -25,6 +25,7 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
     private resolveConfig;
+    private discoverWithCache;
     private setupAccessories;
     private getOrCreateAccessory;
     private get discoveryEnabled();

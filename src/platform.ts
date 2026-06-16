@@ -15,7 +15,8 @@ import { GridImportAccessory } from './gridImportAccessory';
 import { GridExportAccessory } from './gridExportAccessory';
 import { HomeConsumptionAccessory } from './homeConsumptionAccessory';
 import { createEveCharacteristics, EveChars } from './eveCharacteristics';
-import { discoverPVS6 } from './pvs6Discovery';
+import { discoverPVS6, PVS6DiscoveryResult } from './pvs6Discovery';
+import { loadDiscoveryCache, saveDiscoveryCache } from './pvs6DiscoveryCache';
 
 const MIN_POLL_INTERVAL = 5;
 const AUTH_RETRY_MS = 30_000;
@@ -112,6 +113,11 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   // autoDiscover: true  → always run mDNS discovery; host/serialNumber in config are ignored.
   // autoDiscover: false → must supply both host and serialNumber manually; no mDNS.
   // autoDiscover: unset → use config values if both are present, otherwise discover what's missing.
+  //
+  // Discovery results are cached to disk: once mDNS finds the PVS6, subsequent startups reuse
+  // the cached host/serialNumber and skip mDNS entirely. If the cached IP turns out to be stale
+  // (device unreachable), the existing re-discovery flow (checkRediscovery/triggerRediscovery)
+  // takes over and refreshes the cache once mDNS finds it again.
   private async resolveConfig(): Promise<{ host: string; serialNumber: string }> {
     const { host, serialNumber, autoDiscover } = this.config;
 
@@ -123,18 +129,30 @@ export class PVS6Platform implements DynamicPlatformPlugin {
     }
 
     if (autoDiscover === true) {
-      return discoverPVS6(this.log);
+      return this.discoverWithCache();
     }
 
     // autoDiscover not set: use config if complete, otherwise discover what's missing.
     if (host && serialNumber) {
       return { host, serialNumber };
     }
-    const discovered = await discoverPVS6(this.log);
+    const discovered = await this.discoverWithCache();
     return {
       host: host ?? discovered.host,
       serialNumber: serialNumber ?? discovered.serialNumber,
     };
+  }
+
+  // Returns the cached discovery result if one exists, otherwise runs mDNS discovery and caches it.
+  private async discoverWithCache(): Promise<PVS6DiscoveryResult> {
+    const cached = loadDiscoveryCache(this.api, this.log);
+    if (cached) {
+      this.log.info(`Using cached PVS6 location: ${cached.host} (serial: ${cached.serialNumber}) — skipping mDNS discovery`);
+      return cached;
+    }
+    const discovered = await discoverPVS6(this.log);
+    saveDiscoveryCache(this.api, this.log, discovered);
+    return discovered;
   }
 
   private setupAccessories(
@@ -229,6 +247,8 @@ export class PVS6Platform implements DynamicPlatformPlugin {
     try {
       const { host, serialNumber } = await discoverPVS6(this.log);
       this.log.info(`Re-discovery found PVS6 at ${host} (serial: ${serialNumber}) — reconnecting`);
+      // Refresh the cache so the next startup picks up the new address directly.
+      saveDiscoveryCache(this.api, this.log, { host, serialNumber });
       // Increment generation to cancel any pending auth-retry timeouts.
       this.authGeneration++;
       this.stopPolling();
