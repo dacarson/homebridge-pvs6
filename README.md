@@ -1,4 +1,7 @@
 # homebridge-pvs6
+[![License: MIT](https://img.shields.io/github/license/dacarson/homebridge-pvs6)](LICENSE)
+[![Version](https://img.shields.io/github/v/release/dacarson/homebridge-pvs6)](https://github.com/dacarson/homebridge-pvs6/releases)
+[![Downloads](https://img.shields.io/github/downloads/dacarson/homebridge-pvs6/total)](https://github.com/dacarson/homebridge-pvs6/releases)
 
 A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://sunstrong.com) solar monitoring system. Exposes solar production and grid metering as **Eve Energy** accessories in Apple HomeKit, with real-time power, cumulative energy, and native Eve app history.
 
