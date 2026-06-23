@@ -29,7 +29,6 @@ A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://su
 - Polls the PVS6 **local** FCGI API — no SunStrong Connect, no cloud dependency
 - **Auto-discovers** the PVS6 on your local network via mDNS — no IP address or serial number required in config
 - Automatically identifies production and consumption CT meters from the PVS6 device list
-- Designed to complement [homebridge-rainforest-eagle3](https://github.com/dacarson/homebridge-rainforest-eagle3) for a complete solar + grid picture in Apple Home
 
 ---
 
