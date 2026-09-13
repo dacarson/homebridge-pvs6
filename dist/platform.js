@@ -112,24 +112,25 @@ class PVS6Platform {
     setupAccessories(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     FakeGatoHistoryService, serialNumber) {
+        const matterEnabled = this.config.matter === true;
         // Solar Production is always registered.
         const solarName = this.config.solarName ?? 'Solar Production';
         const solarUuid = this.api.hap.uuid.generate(`${serialNumber}-solar`);
-        this.solarAccessory = new solarAccessory_1.SolarAccessory(this, this.getOrCreateAccessory(solarUuid, solarName), FakeGatoHistoryService, solarName, serialNumber);
+        this.solarAccessory = new solarAccessory_1.SolarAccessory(this, this.getOrCreateAccessory(solarUuid, solarName), FakeGatoHistoryService, solarName, serialNumber, matterEnabled);
         // Grid Import + Grid Export are registered together as an optional pair (default: enabled).
         if (this.config.accessories?.grid !== false) {
             const importName = this.config.gridName ?? 'Grid Meter - Import';
             const importUuid = this.api.hap.uuid.generate(`${serialNumber}-grid`);
-            this.gridImportAccessory = new gridImportAccessory_1.GridImportAccessory(this, this.getOrCreateAccessory(importUuid, importName), FakeGatoHistoryService, importName, serialNumber);
+            this.gridImportAccessory = new gridImportAccessory_1.GridImportAccessory(this, this.getOrCreateAccessory(importUuid, importName), FakeGatoHistoryService, importName, serialNumber, matterEnabled);
             const exportName = this.config.gridExportName ?? 'Grid Meter - Export';
             const exportUuid = this.api.hap.uuid.generate(`${serialNumber}-grid-export`);
-            this.gridExportAccessory = new gridExportAccessory_1.GridExportAccessory(this, this.getOrCreateAccessory(exportUuid, exportName), FakeGatoHistoryService, exportName, serialNumber);
+            this.gridExportAccessory = new gridExportAccessory_1.GridExportAccessory(this, this.getOrCreateAccessory(exportUuid, exportName), FakeGatoHistoryService, exportName, serialNumber, matterEnabled);
         }
         // Home Consumption is optional (default: disabled).
         if (this.config.accessories?.homeConsumption === true) {
             const homeName = this.config.homeConsumptionName ?? 'Home Consumption';
             const homeUuid = this.api.hap.uuid.generate(`${serialNumber}-home`);
-            this.homeConsumptionAccessory = new homeConsumptionAccessory_1.HomeConsumptionAccessory(this, this.getOrCreateAccessory(homeUuid, homeName), FakeGatoHistoryService, homeName, serialNumber);
+            this.homeConsumptionAccessory = new homeConsumptionAccessory_1.HomeConsumptionAccessory(this, this.getOrCreateAccessory(homeUuid, homeName), FakeGatoHistoryService, homeName, serialNumber, matterEnabled);
         }
     }
     getOrCreateAccessory(uuid, displayName) {

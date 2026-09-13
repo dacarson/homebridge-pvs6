@@ -6,6 +6,7 @@ export interface PVS6Config extends PlatformConfig {
     host?: string;
     serialNumber?: string;
     pollInterval?: number;
+    matter?: boolean;
     accessories?: {
         grid?: boolean;
         homeConsumption?: boolean;
