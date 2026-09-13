@@ -20,13 +20,19 @@
  * control, which is a better fit for a solar/grid/home meter than an outlet.
  * This module talks to that API directly:
  *
- *   powerW   -> electricalPowerMeasurement.activePower                (mW)
- *   energyKWh -> electricalEnergyMeasurement.cumulativeEnergyImported  (mWh)
- *             or .cumulativeEnergyExported, depending on this meter's
+ *   powerW   -> electricalPowerMeasurement.activePower                       (mW)
+ *   energyKWh -> electricalEnergyMeasurement.cumulativeEnergyImported.energy  (mWh)
+ *             or .cumulativeEnergyExported.energy, depending on this meter's
  *             direction (see EnergyDirection below).
  *
  * Matter expresses power in milliwatts and energy in milliwatt-hours, hence
- * the x1000 / x1,000,000 conversions.
+ * the x1000 / x1,000,000 conversions. cumulativeEnergyImported/Exported are
+ * themselves structs (EnergyMeasurementStruct — { energy, startTimestamp?,
+ * endTimestamp?, ... }), not plain numbers: Homebridge's updateAccessoryState()
+ * accepts and normalizes a flat number for convenience, but the *initial*
+ * state passed at registration goes straight to matter.js's struct-typed
+ * attribute and must already be an object, or registration fails with
+ * "Cannot manage number because it is not a struct".
  *
  * Homebridge derives the mandatory cluster attributes (powerMode, accuracy,
  * numberOfMeasurementTypes, the PowerTopology cluster) and the feature-gated
@@ -78,8 +84,8 @@ export interface EnergyReadings {
 interface MatterAccessoryClusters {
   electricalPowerMeasurement: { activePower: number };
   electricalEnergyMeasurement:
-    | { cumulativeEnergyImported: number }
-    | { cumulativeEnergyExported: number };
+    | { cumulativeEnergyImported: { energy: number } }
+    | { cumulativeEnergyExported: { energy: number } };
 }
 
 interface MatterAccessoryDefinition {
@@ -157,7 +163,7 @@ export class MatterEnergyBridge {
   }
 
   private buildClusters(r: EnergyReadings): MatterAccessoryClusters {
-    const energy = kWhToMilliWh(r.energyKWh);
+    const energy = { energy: kWhToMilliWh(r.energyKWh) };
     return {
       electricalPowerMeasurement: { activePower: wToMilliW(r.powerW) },
       electricalEnergyMeasurement:
