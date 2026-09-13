@@ -218,7 +218,11 @@ Each `MatterEnergyBridge` is fixed to one direction (`'imported'` or `'exported'
 
 **Requirements:** Homebridge 2.3.0+, with Matter enabled on this plugin's child bridge (Homebridge UI → plugin settings → Bridge Settings → enable Matter).
 
-**Real-world commissioning note:** a Homebridge-side Matter child bridge "reset" generates a fresh passcode/discriminator — the old QR/manual code from before the reset is no longer valid. Separately, after unpairing and re-pairing a bridge, a stuck PASE handshake (`Cannot manage number because it is not a struct` is unrelated; look instead for repeated `[Matter/PaseServer] An error occurred during PASE commissioning ... InvalidParam ... PasePake3`) was resolved in practice by rebooting the commissioning iPhone — likely stale HomeKit/Matter daemon session state on the phone, not a Homebridge or plugin issue. `bridge.bind` pinned to the actual active interface (e.g. `eth0` on a Pi with an inactive `wlan0` still administratively up) is also worth setting regardless, per Homebridge's own warning, though it did not turn out to be the cause in this case.
+**Real-world commissioning notes:**
+
+- A Homebridge-side Matter child bridge "reset" generates a fresh passcode/discriminator — the old QR/manual code from before the reset is no longer valid.
+- Separately, after unpairing and re-pairing a bridge, a stuck PASE handshake (`Cannot manage number because it is not a struct` is unrelated; look instead for repeated `[Matter/PaseServer] An error occurred during PASE commissioning ... InvalidParam ... PasePake3`) was resolved in practice by rebooting the commissioning iPhone — likely stale HomeKit/Matter daemon session state on the phone, not a Homebridge or plugin issue. `bridge.bind` pinned to the actual active interface (e.g. `eth0` on a Pi with an inactive `wlan0` still administratively up) is also worth setting regardless, per Homebridge's own warning, though it did not turn out to be the cause here.
+- Switching an already-paired accessory's Matter device type (e.g. the `ElectricalSensor` → `OnOffOutlet` change above) requires unpairing and re-pairing the bridge — the endpoint composition itself changed, not just its state, so the previously-commissioned session can't just pick up the new shape. Confirmed live: after unpair/re-pair, all four tiles correctly showed live values instead of "Not Supported."
 
 ---
 
