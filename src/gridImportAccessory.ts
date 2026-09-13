@@ -72,11 +72,12 @@ export class GridImportAccessory {
       if (bridge.isSupported()) {
         this.matter = bridge;
         bridge.register(`${serialNumber}-grid-import`, displayName, `${serialNumber}-grid`, {
+          on: this.lastPowerW > 0,
           powerW: this.lastPowerW,
           energyKWh: this.lastEnergyKWh,
         }).catch(() => {});
       } else {
-        platform.log.info('[matter] Config option "matter" is enabled, but the Matter API is unavailable. It needs a Homebridge build with the ElectricalSensor device type, with Matter enabled on this plugin\'s child bridge. Continuing with HomeKit/Eve only.');
+        platform.log.info('[matter] Config option "matter" is enabled, but the Matter API is unavailable. It needs a Homebridge build with the OnOffOutlet device type, with Matter enabled on this plugin\'s child bridge. Continuing with HomeKit/Eve only.');
       }
     }
   }
@@ -99,7 +100,7 @@ export class GridImportAccessory {
       power: this.lastPowerW,
     });
 
-    this.matter?.update({ powerW: this.lastPowerW, energyKWh: this.lastEnergyKWh }).catch(() => {});
+    this.matter?.update({ on: this.lastPowerW > 0, powerW: this.lastPowerW, energyKWh: this.lastEnergyKWh }).catch(() => {});
 
     this.platform.log.debug(`Grid Import: ${this.lastPowerW}W  ${this.lastEnergyKWh}kWh`);
   }

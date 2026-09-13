@@ -2,9 +2,9 @@
  * matterEnergy.ts
  *
  * Publishes a PVS6 meter (solar, grid import, grid export, home consumption)
- * to Matter controllers as an electrical sensor reporting live power and
- * cumulative energy, so it appears in the Apple Home Energy view (iOS 26+)
- * with live watts on its tile.
+ * to Matter controllers as an outlet reporting live power and cumulative
+ * energy, so it appears in the Apple Home Energy view (iOS 26+) with live
+ * watts on its tile.
  *
  * Background
  * ----------
@@ -15,15 +15,28 @@
  * apps and never populate the native Energy tile.
  *
  * Homebridge 2.2.0 added the ElectricalPowerMeasurement / ElectricalEnergyMeasurement
- * clusters to its Matter plugin API, and later releases added the
- * ElectricalSensor device type — a pure metering endpoint with no on/off
- * control, which is a better fit for a solar/grid/home meter than an outlet.
- * This module talks to that API directly:
+ * clusters to its Matter plugin API. A pure metering device type with no
+ * actionable primary cluster (e.g. ElectricalSensor, declaring only the
+ * measurement clusters) does register and its wattage does roll into the
+ * Home app's room/home aggregate power total — but as verified live, its
+ * tile shows "Not Supported" as the headline status, because Home's tile
+ * face wants a primary characteristic (on/off, a sensor reading, etc.) to
+ * show, and pure measurement clusters don't provide one. Declaring `onOff`
+ * via the OnOffOutlet device type (the same approach homebridge-chargepoint
+ * uses, confirmed working) gives Home that headline, while these clusters
+ * still populate the Energy view exactly as before:
  *
+ *   on       -> onOff.onOff                                             (bool)
  *   powerW   -> electricalPowerMeasurement.activePower                       (mW)
  *   energyKWh -> electricalEnergyMeasurement.cumulativeEnergyImported.energy  (mWh)
  *             or .cumulativeEnergyExported.energy, depending on this meter's
  *             direction (see EnergyDirection below).
+ *
+ * `on` mirrors each accessory's own HAP `On` characteristic exactly (true
+ * when lastPowerW > 0) — see the matching logic in each *Accessory.ts file.
+ * None of these meters are actually controllable, so a set command is
+ * accepted (so the controller isn't left hanging) and logged as rejected;
+ * the next poll pushes the true state back. See _rejectControl().
  *
  * Matter expresses power in milliwatts and energy in milliwatt-hours, hence
  * the x1000 / x1,000,000 conversions. cumulativeEnergyImported/Exported are
@@ -35,17 +48,17 @@
  * "Cannot manage number because it is not a struct".
  *
  * Homebridge derives the mandatory cluster attributes (powerMode, accuracy,
- * numberOfMeasurementTypes, the PowerTopology cluster) and the feature-gated
- * ElectricalEnergyMeasurement features from the declared state — declaring
- * `cumulativeEnergyImported` selects the ImportedEnergy + CumulativeEnergy
- * features, `cumulativeEnergyExported` selects ExportedEnergy + CumulativeEnergy.
- * No voltage/current data is available from the PVS6 varserver reliably
- * enough to publish, so only activePower is declared; voltage/activeCurrent
- * are optional per the Matter spec and are simply omitted.
+ * numberOfMeasurementTypes) and the feature-gated ElectricalEnergyMeasurement
+ * features from the declared state — declaring `cumulativeEnergyImported`
+ * selects the ImportedEnergy + CumulativeEnergy features, `cumulativeEnergyExported`
+ * selects ExportedEnergy + CumulativeEnergy. No voltage/current data is
+ * available from the PVS6 varserver reliably enough to publish, so only
+ * activePower is declared; voltage/activeCurrent are optional per the
+ * Matter spec and are simply omitted.
  *
  * Requirements
  * ------------
- * - Homebridge 2.3.0+ with the ElectricalSensor device type (2.4.0+ verified)
+ * - Homebridge 2.3.0+
  * - Matter enabled on this plugin's child bridge (Homebridge UI ->
  *   plugin settings -> Bridge Settings -> enable Matter)
  *
@@ -77,11 +90,13 @@ function kWhToMilliWh(value: number): number {
 export type EnergyDirection = 'imported' | 'exported';
 
 export interface EnergyReadings {
+  on: boolean;
   powerW: number;
   energyKWh: number;
 }
 
 interface MatterAccessoryClusters {
+  onOff: { onOff: boolean };
   electricalPowerMeasurement: { activePower: number };
   electricalEnergyMeasurement:
     | { cumulativeEnergyImported: { energy: number } }
@@ -96,6 +111,12 @@ interface MatterAccessoryDefinition {
   manufacturer?: string;
   model?: string;
   clusters: MatterAccessoryClusters;
+  handlers?: {
+    onOff?: {
+      on?: () => Promise<void> | void;
+      off?: () => Promise<void> | void;
+    };
+  };
 }
 
 // Minimal shape of the subset of Homebridge's Matter plugin API this module
@@ -103,7 +124,7 @@ interface MatterAccessoryDefinition {
 // api.matter only ship with Homebridge 2.2+; this keeps the plugin buildable
 // against older @types without pulling in a hard dependency on them.
 interface MatterAPILike {
-  deviceTypes: { ElectricalSensor?: unknown };
+  deviceTypes: { OnOffOutlet?: unknown };
   registerPlatformAccessories: (
     pluginIdentifier: string,
     platformName: string,
@@ -118,6 +139,7 @@ type APIWithMatter = API & { matter?: MatterAPILike };
 export class MatterEnergyBridge {
   private readonly api: APIWithMatter;
   private uuid: string | null = null;
+  private displayName = '';
   private registered = false;
   private warnedUpdate = false;
 
@@ -130,8 +152,8 @@ export class MatterEnergyBridge {
   }
 
   /**
-   * Whether this Homebridge build exposes everything needed to publish an
-   * electrical sensor. Logs at debug level so unsupported builds stay quiet.
+   * Whether this Homebridge build exposes everything needed to publish this
+   * meter. Logs at debug level so unsupported builds stay quiet.
    */
   isSupported(): boolean {
     const matter = this.api.matter;
@@ -139,8 +161,8 @@ export class MatterEnergyBridge {
       this.log.debug('[matter] api.matter unavailable — Matter energy export disabled. Requires Homebridge 2.3.0+ with Matter enabled on this plugin\'s child bridge.');
       return false;
     }
-    if (!matter.deviceTypes?.ElectricalSensor) {
-      this.log.debug('[matter] api.matter.deviceTypes.ElectricalSensor unavailable — Matter energy export disabled. Requires a newer Homebridge build.');
+    if (!matter.deviceTypes?.OnOffOutlet) {
+      this.log.debug('[matter] api.matter.deviceTypes.OnOffOutlet unavailable — Matter energy export disabled. Requires a newer Homebridge build.');
       return false;
     }
     if (typeof matter.registerPlatformAccessories !== 'function' || typeof matter.updateAccessoryState !== 'function') {
@@ -153,6 +175,7 @@ export class MatterEnergyBridge {
   private buildClusters(r: EnergyReadings): MatterAccessoryClusters {
     const energy = { energy: kWhToMilliWh(r.energyKWh) };
     return {
+      onOff: { onOff: r.on },
       electricalPowerMeasurement: { activePower: wToMilliW(r.powerW) },
       electricalEnergyMeasurement:
         this.direction === 'imported'
@@ -162,7 +185,7 @@ export class MatterEnergyBridge {
   }
 
   /**
-   * Register this meter as a Matter electrical sensor.
+   * Register this meter as a Matter outlet with electrical measurements.
    *
    * @param seedKey - unique per-meter key used to derive this accessory's
    * Matter UUID, distinct from the HAP accessory's UUID
@@ -174,27 +197,41 @@ export class MatterEnergyBridge {
     if (!this.isSupported()) return false;
     const matter = this.api.matter!;
     this.uuid = matter.uuid.generate(`${PLUGIN_NAME}:matter:${seedKey}`);
+    this.displayName = displayName;
 
     const accessory: MatterAccessoryDefinition = {
       UUID: this.uuid,
       displayName,
-      deviceType: matter.deviceTypes.ElectricalSensor,
+      deviceType: matter.deviceTypes.OnOffOutlet,
       serialNumber,
       manufacturer: 'SunStrong',
       model: 'PVS6',
       clusters: this.buildClusters(readings),
+      handlers: {
+        // None of these meters can actually be switched. Accept the command
+        // so the controller isn't left hanging, warn, and let the next poll
+        // push the true state back.
+        onOff: {
+          on: async () => this._rejectControl(true),
+          off: async () => this._rejectControl(false),
+        },
+      },
     };
 
     try {
       await matter.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.registered = true;
-      this.log.info(`[matter] Published "${displayName}" as a Matter electrical sensor — live power/energy should appear in the Apple Home Energy view.`);
+      this.log.info(`[matter] Published "${displayName}" as a Matter outlet with electrical measurements — live power should appear on its tile in the Apple Home Energy view.`);
       return true;
     } catch (err) {
       this.log.warn(`[matter] Failed to register Matter accessory for "${displayName}" (${err instanceof Error ? err.message : err}). Continuing with HomeKit/Eve only.`);
       this.registered = false;
       return false;
     }
+  }
+
+  private _rejectControl(requested: boolean): void {
+    this.log.warn(`[matter] Ignoring request to turn "${this.displayName}" ${requested ? 'on' : 'off'} — this meter cannot be controlled through this plugin.`);
   }
 
   /**
@@ -210,6 +247,7 @@ export class MatterEnergyBridge {
 
     try {
       await Promise.all([
+        matter.updateAccessoryState(this.uuid, 'onOff', clusters.onOff),
         matter.updateAccessoryState(this.uuid, 'electricalPowerMeasurement', clusters.electricalPowerMeasurement),
         matter.updateAccessoryState(this.uuid, 'electricalEnergyMeasurement', clusters.electricalEnergyMeasurement),
       ]);
