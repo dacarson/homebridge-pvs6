@@ -160,6 +160,8 @@ export class PVS6Platform implements DynamicPlatformPlugin {
     FakeGatoHistoryService: any,
     serialNumber: string,
   ): void {
+    const matterEnabled = this.config.matter === true;
+
     // Solar Production is always registered.
     const solarName = this.config.solarName ?? 'Solar Production';
     const solarUuid = this.api.hap.uuid.generate(`${serialNumber}-solar`);
@@ -169,6 +171,7 @@ export class PVS6Platform implements DynamicPlatformPlugin {
       FakeGatoHistoryService,
       solarName,
       serialNumber,
+      matterEnabled,
     );
 
     // Grid Import + Grid Export are registered together as an optional pair (default: enabled).
@@ -181,6 +184,7 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         FakeGatoHistoryService,
         importName,
         serialNumber,
+        matterEnabled,
       );
 
       const exportName = this.config.gridExportName ?? 'Grid Meter - Export';
@@ -191,6 +195,7 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         FakeGatoHistoryService,
         exportName,
         serialNumber,
+        matterEnabled,
       );
     }
 
@@ -204,6 +209,7 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         FakeGatoHistoryService,
         homeName,
         serialNumber,
+        matterEnabled,
       );
     }
   }

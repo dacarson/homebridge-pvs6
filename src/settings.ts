@@ -8,6 +8,7 @@ export interface PVS6Config extends PlatformConfig {
   host?: string;
   serialNumber?: string;
   pollInterval?: number;
+  matter?: boolean;
   accessories?: {
     grid?: boolean;             // enables/disables the grid pair (Import + Export) as a unit
     homeConsumption?: boolean;  // enables/disables the Home Consumption accessory (default: false)

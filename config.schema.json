@@ -35,6 +35,12 @@
         "minimum": 5,
         "description": "How often to poll the PVS6 for new data. Minimum 5 seconds."
       },
+      "matter": {
+        "title": "Show in the Apple Home Energy view (via Matter)",
+        "type": "boolean",
+        "default": false,
+        "description": "Also publish each enabled meter (Solar, Grid Import/Export, Home Consumption) over Matter as an electrical sensor with live power and cumulative energy, so it shows watts on its tile and feeds your home energy total. Requires Homebridge 2.3.0+ with Matter enabled on this plugin's child bridge; skipped safely otherwise."
+      },
       "accessories": {
         "title": "Accessories",
         "type": "object",
