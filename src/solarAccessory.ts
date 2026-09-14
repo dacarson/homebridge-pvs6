@@ -3,6 +3,16 @@ import { PVS6Platform } from './platform';
 import { PVS6Reading } from './pvs6Client';
 import { EVE_ENERGY_SERVICE_UUID } from './eveCharacteristics';
 import { MatterEnergyBridge } from './matterEnergy';
+// EXPERIMENTAL SPIKE — see the deviceTypeOverride note in matterEnergy.ts.
+// This imports matter.js directly from our own pinned @matter/main
+// dependency, which is a *different module instance* than the one bundled
+// and lazy-loaded internally by Homebridge's own Matter server. Prior art:
+// branch experiment/matter-solar-power-device-type confirmed this registers
+// and pairs correctly despite that. The version pinned in package.json MUST
+// match the @matter/main version your target Homebridge install uses
+// internally (logged at startup as "Matter.js vX.Y.Z"), or this conflates
+// "different module instance" with "different library version".
+import { SolarPowerDevice } from '@matter/main/devices/solar-power';
 
 export class SolarAccessory {
   private readonly service: Service;
@@ -75,7 +85,7 @@ export class SolarAccessory {
       // Matter's activePower sign convention is positive = drawing power,
       // negative = supplying it, so a generation-only meter like this one
       // must negate its (always non-negative) wattage for Matter.
-      const bridge = new MatterEnergyBridge(platform.api, platform.log, 'exported');
+      const bridge = new MatterEnergyBridge(platform.api, platform.log, 'exported', SolarPowerDevice);
       if (bridge.isSupported()) {
         this.matter = bridge;
         bridge.register(`${serialNumber}-solar`, displayName, `${serialNumber}-solar`, {

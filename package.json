@@ -42,6 +42,7 @@
     "homebridge": ">=2.0.0"
   },
   "dependencies": {
+    "@matter/main": "0.17.9",
     "bonjour-hap": "^3.0.0",
     "fakegato-history": "^0.6.7"
   },
