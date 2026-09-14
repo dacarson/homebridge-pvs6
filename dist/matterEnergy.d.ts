@@ -56,6 +56,26 @@
  * activePower is declared; voltage/activeCurrent are optional per the
  * Matter spec and are simply omitted.
  *
+ * Cumulative vs. periodic energy
+ * ------------------------------
+ * Alongside the cumulative (lifetime) total, this module also declares the
+ * PeriodicEnergy feature (`periodicEnergyImported`/`periodicEnergyExported`)
+ * — a per-interval delta with its own start/end timestamps. Per prior art in
+ * homebridge-shelly-matter (github.com/keremerkan/homebridge-shelly-matter,
+ * shellyAccessory.ts), this is what drives Apple Home's per-device energy
+ * attribution in the Energy view, not the cumulative total alone. Matter
+ * features compose once at registration, so PeriodicEnergy must already be
+ * present in the *initial* cluster state passed to registerPlatformAccessories()
+ * — declaring it for the first time in a later updateAccessoryState() call
+ * would not retroactively add the feature. buildClusters() therefore seeds a
+ * zero-energy periodic fragment (no timestamps yet) on its very first call,
+ * which is always the one register() makes, before any real reading exists
+ * to diff against; every call after that computes a real delta against the
+ * last *periodic* baseline (not the last poll), throttled to at most once
+ * per MIN_PERIODIC_INTERVAL_S so a short poll interval (default 10s, minimum
+ * 5s) doesn't turn into excessive Matter event/state churn compared to a
+ * device that naturally reports once a minute.
+ *
  * Requirements
  * ------------
  * - Homebridge 2.3.0+
@@ -76,11 +96,15 @@ export interface EnergyReadings {
 export declare class MatterEnergyBridge {
     private readonly log;
     private readonly direction;
+    private static readonly MIN_PERIODIC_INTERVAL_S;
     private readonly api;
     private uuid;
     private displayName;
     private registered;
     private warnedUpdate;
+    private lastPeriodicBaselineKWh;
+    private lastPeriodicTimestampS;
+    private lastPeriodic;
     constructor(api: API, log: Logger, direction: EnergyDirection);
     /**
      * Whether this Homebridge build exposes everything needed to publish this
@@ -88,6 +112,15 @@ export declare class MatterEnergyBridge {
      */
     isSupported(): boolean;
     private buildClusters;
+    /**
+     * Compute (or, between periodic reports, just return the last computed)
+     * periodic-energy fragment. The very first call — always from register(),
+     * before any real reading exists — seeds a zero-energy fragment with no
+     * timestamps, purely so the PeriodicEnergy feature composes at
+     * registration. Every call after that reports a real delta against the
+     * last periodic baseline once MIN_PERIODIC_INTERVAL_S has elapsed.
+     */
+    private computePeriodic;
     /**
      * Register this meter as a Matter outlet with electrical measurements.
      *

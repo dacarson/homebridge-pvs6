@@ -56,6 +56,26 @@
  * activePower is declared; voltage/activeCurrent are optional per the
  * Matter spec and are simply omitted.
  *
+ * Cumulative vs. periodic energy
+ * ------------------------------
+ * Alongside the cumulative (lifetime) total, this module also declares the
+ * PeriodicEnergy feature (`periodicEnergyImported`/`periodicEnergyExported`)
+ * — a per-interval delta with its own start/end timestamps. Per prior art in
+ * homebridge-shelly-matter (github.com/keremerkan/homebridge-shelly-matter,
+ * shellyAccessory.ts), this is what drives Apple Home's per-device energy
+ * attribution in the Energy view, not the cumulative total alone. Matter
+ * features compose once at registration, so PeriodicEnergy must already be
+ * present in the *initial* cluster state passed to registerPlatformAccessories()
+ * — declaring it for the first time in a later updateAccessoryState() call
+ * would not retroactively add the feature. buildClusters() therefore seeds a
+ * zero-energy periodic fragment (no timestamps yet) on its very first call,
+ * which is always the one register() makes, before any real reading exists
+ * to diff against; every call after that computes a real delta against the
+ * last *periodic* baseline (not the last poll), throttled to at most once
+ * per MIN_PERIODIC_INTERVAL_S so a short poll interval (default 10s, minimum
+ * 5s) doesn't turn into excessive Matter event/state churn compared to a
+ * device that naturally reports once a minute.
+ *
  * Requirements
  * ------------
  * - Homebridge 2.3.0+
@@ -95,12 +115,22 @@ export interface EnergyReadings {
   energyKWh: number;
 }
 
+// Matter's EnergyMeasurementStruct. `energy` (mWh) is mandatory;
+// startTimestamp/endTimestamp (Unix seconds — matter.js converts to Matter's
+// native epoch-s) are omitted for a not-yet-measured seed value and present
+// once a real interval has been measured.
+interface EnergyStruct {
+  energy: number;
+  startTimestamp?: number;
+  endTimestamp?: number;
+}
+
 interface MatterAccessoryClusters {
   onOff: { onOff: boolean };
   electricalPowerMeasurement: { activePower: number };
   electricalEnergyMeasurement:
-    | { cumulativeEnergyImported: { energy: number } }
-    | { cumulativeEnergyExported: { energy: number } };
+    | { cumulativeEnergyImported: EnergyStruct; periodicEnergyImported: EnergyStruct }
+    | { cumulativeEnergyExported: EnergyStruct; periodicEnergyExported: EnergyStruct };
 }
 
 interface MatterAccessoryDefinition {
@@ -137,11 +167,21 @@ interface MatterAPILike {
 type APIWithMatter = API & { matter?: MatterAPILike };
 
 export class MatterEnergyBridge {
+  private static readonly MIN_PERIODIC_INTERVAL_S = 60;
+
   private readonly api: APIWithMatter;
   private uuid: string | null = null;
   private displayName = '';
   private registered = false;
   private warnedUpdate = false;
+
+  // Periodic-energy bookkeeping — see the "Cumulative vs. periodic energy"
+  // note at the top of this file. lastPeriodicBaselineKWh/-TimestampS mark
+  // the start of the current periodic window; lastPeriodic is the most
+  // recently computed fragment, resent unchanged between periodic reports.
+  private lastPeriodicBaselineKWh: number | null = null;
+  private lastPeriodicTimestampS: number | null = null;
+  private lastPeriodic: EnergyStruct = { energy: 0 };
 
   constructor(
     api: API,
@@ -173,15 +213,47 @@ export class MatterEnergyBridge {
   }
 
   private buildClusters(r: EnergyReadings): MatterAccessoryClusters {
-    const energy = { energy: kWhToMilliWh(r.energyKWh) };
+    const cumulative = { energy: kWhToMilliWh(r.energyKWh) };
+    const periodic = this.computePeriodic(r.energyKWh);
+    const energyField = this.direction === 'imported'
+      ? { cumulativeEnergyImported: cumulative, periodicEnergyImported: periodic }
+      : { cumulativeEnergyExported: cumulative, periodicEnergyExported: periodic };
     return {
       onOff: { onOff: r.on },
       electricalPowerMeasurement: { activePower: wToMilliW(r.powerW) },
-      electricalEnergyMeasurement:
-        this.direction === 'imported'
-          ? { cumulativeEnergyImported: energy }
-          : { cumulativeEnergyExported: energy },
+      electricalEnergyMeasurement: energyField,
     };
+  }
+
+  /**
+   * Compute (or, between periodic reports, just return the last computed)
+   * periodic-energy fragment. The very first call — always from register(),
+   * before any real reading exists — seeds a zero-energy fragment with no
+   * timestamps, purely so the PeriodicEnergy feature composes at
+   * registration. Every call after that reports a real delta against the
+   * last periodic baseline once MIN_PERIODIC_INTERVAL_S has elapsed.
+   */
+  private computePeriodic(energyKWh: number): EnergyStruct {
+    const nowS = Math.floor(Date.now() / 1000);
+
+    if (this.lastPeriodicBaselineKWh === null || this.lastPeriodicTimestampS === null) {
+      this.lastPeriodicBaselineKWh = energyKWh;
+      this.lastPeriodicTimestampS = nowS;
+      return this.lastPeriodic;
+    }
+
+    if (nowS - this.lastPeriodicTimestampS >= MatterEnergyBridge.MIN_PERIODIC_INTERVAL_S) {
+      const deltaKWh = Math.max(0, energyKWh - this.lastPeriodicBaselineKWh);
+      this.lastPeriodic = {
+        energy: kWhToMilliWh(deltaKWh),
+        startTimestamp: this.lastPeriodicTimestampS,
+        endTimestamp: nowS,
+      };
+      this.lastPeriodicBaselineKWh = energyKWh;
+      this.lastPeriodicTimestampS = nowS;
+    }
+
+    return this.lastPeriodic;
   }
 
   /**

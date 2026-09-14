@@ -237,6 +237,8 @@ None of these meters can actually be switched — toggling one in the Home app i
 
 **Why an outlet and not a pure sensor:** an earlier version of this feature used Matter's `ElectricalSensor` device type (metering only, no on/off). That data reached the Home app's room/home aggregate power total correctly, but the accessory's own tile showed "Not Supported" as its headline status — Home's tile face wants a primary characteristic (on/off, a reading, etc.) to display, and pure measurement clusters don't provide one. Declaring `onOff` (the same approach [homebridge-chargepoint](https://github.com/dacarson/homebridge-chargepoint) uses) gives Home that headline while the measurement clusters still populate the Energy view exactly as before.
 
+**Cumulative and periodic energy:** each meter reports both the lifetime total (`cumulativeEnergyImported`/`Exported`) and a periodic delta (`periodicEnergyImported`/`Exported`, at most once a minute) with its own start/end timestamps. The periodic figure is what drives Apple Home's per-device energy attribution in the Energy view, not the cumulative total alone.
+
 Requirements:
 
 - **Homebridge 2.3.0 or later**
