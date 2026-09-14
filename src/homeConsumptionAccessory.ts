@@ -72,12 +72,11 @@ export class HomeConsumptionAccessory {
       if (bridge.isSupported()) {
         this.matter = bridge;
         bridge.register(`${serialNumber}-home`, displayName, `${serialNumber}-home`, {
-          on: this.lastPowerW > 0,
           powerW: this.lastPowerW,
-          energyKWh: this.lastEnergyKWh,
+          importedEnergyKWh: this.lastEnergyKWh,
         }).catch(() => {});
       } else {
-        platform.log.info('[matter] Config option "matter" is enabled, but the Matter API is unavailable. It needs a Homebridge build with the OnOffOutlet device type, with Matter enabled on this plugin\'s child bridge. Continuing with HomeKit/Eve only.');
+        platform.log.info('[matter] Config option "matter" is enabled, but the Matter API is unavailable. It needs a Homebridge build with the ElectricalSensor device type, with Matter enabled on this plugin\'s child bridge. Continuing with HomeKit/Eve only.');
       }
     }
   }
@@ -99,7 +98,7 @@ export class HomeConsumptionAccessory {
       power: this.lastPowerW,
     });
 
-    this.matter?.update({ on: this.lastPowerW > 0, powerW: this.lastPowerW, energyKWh: this.lastEnergyKWh }).catch(() => {});
+    this.matter?.update({ powerW: this.lastPowerW, importedEnergyKWh: this.lastEnergyKWh }).catch(() => {});
 
     this.platform.log.debug(`Home Consumption: ${this.lastPowerW}W  ${this.lastEnergyKWh.toFixed(3)}kWh`);
   }

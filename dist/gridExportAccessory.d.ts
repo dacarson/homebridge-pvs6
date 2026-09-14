@@ -7,8 +7,7 @@ export declare class GridExportAccessory {
     private readonly historyService;
     private lastPowerW;
     private lastEnergyKWh;
-    private matter;
-    constructor(platform: PVS6Platform, accessory: PlatformAccessory, FakeGatoHistoryService: any, displayName: string, serialNumber: string, matterEnabled?: boolean);
+    constructor(platform: PVS6Platform, accessory: PlatformAccessory, FakeGatoHistoryService: any, displayName: string, serialNumber: string);
     updateValues(reading: PVS6Reading): void;
 }
 //# sourceMappingURL=gridExportAccessory.d.ts.map

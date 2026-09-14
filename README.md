@@ -222,20 +222,19 @@ The derived kWh formula is exact without a battery: solar energy either goes to 
 
 Apple Home's native **Energy** view is driven by **Matter** electrical-measurement clusters, **not** by classic HomeKit/HAP characteristics. HAP has no power or energy characteristic at all, so the Eve characteristics above (which only Eve-class apps read) can never populate it — no matter how the HomeKit accessory is shaped.
 
-With `"matter": true`, this plugin publishes each enabled meter a second time over Matter, as an **outlet** carrying an on/off state plus live power and cumulative energy:
+With `"matter": true`, this plugin publishes an **`ElectricalSensor`** Matter accessory for each enabled meter, carrying live power and cumulative/periodic energy — no on/off, no controllable state, purely metering:
 
-| Accessory | Matter on/off | Matter power attribute | Matter energy attribute |
+| Meter | Matter accessory | Matter power attribute | Matter energy attributes |
 |---|---|---|---|
-| Solar Production | `onOff.onOff` | `electricalPowerMeasurement.activePower` | `electricalEnergyMeasurement.cumulativeEnergyExported` |
-| Grid Import | `onOff.onOff` | `electricalPowerMeasurement.activePower` | `electricalEnergyMeasurement.cumulativeEnergyImported` |
-| Grid Export | `onOff.onOff` | `electricalPowerMeasurement.activePower` | `electricalEnergyMeasurement.cumulativeEnergyExported` |
-| Home Consumption | `onOff.onOff` | `electricalPowerMeasurement.activePower` | `electricalEnergyMeasurement.cumulativeEnergyImported` |
+| Solar Production | "Solar Production" | `electricalPowerMeasurement.activePower` | `electricalEnergyMeasurement.cumulativeEnergyExported` |
+| Grid | "Grid" | `electricalPowerMeasurement.activePower` (signed: positive = importing, negative = exporting) | `electricalEnergyMeasurement.cumulativeEnergyImported` **and** `cumulativeEnergyExported`, together |
+| Home Consumption | "Home Consumption" | `electricalPowerMeasurement.activePower` | `electricalEnergyMeasurement.cumulativeEnergyImported` |
 
-The on/off state mirrors each meter's own Eve `On` characteristic exactly (true when its watts are non-zero). Power is sent in milliwatts, energy in milliwatt-hours, per the Matter spec. Each meter reports in only one energy direction — imported for meters measuring energy flowing in (Grid Import, Home Consumption), exported for meters measuring energy flowing out (Solar, Grid Export).
+Power is sent in milliwatts, energy in milliwatt-hours, per the Matter spec.
 
-None of these meters can actually be switched — toggling one in the Home app is rejected (logged, then the next poll pushes the true state back), the same pattern used for the Eve `On` characteristic above.
+**Grid Import and Grid Export stay two separate accessories in Eve/HomeKit** (see [HomeKit Accessories](#homekit-accessories) below) — that split exists only because Eve's custom Energy characteristic can't represent a negative wattage. Matter's `activePower` attribute *is* signed, so on the Matter side the grid meter is published as a single **"Grid"** accessory instead, with power flipping sign as the meter crosses between importing and exporting. Matter's cumulative/periodic *energy* attributes have no equivalent signed "net" value — Imported and Exported are always separate running totals per the Matter spec — so the Grid accessory reports both simultaneously on the one accessory rather than needing two.
 
-**Why an outlet and not a pure sensor:** an earlier version of this feature used Matter's `ElectricalSensor` device type (metering only, no on/off). That data reached the Home app's room/home aggregate power total correctly, but the accessory's own tile showed "Not Supported" as its headline status — Home's tile face wants a primary characteristic (on/off, a reading, etc.) to display, and pure measurement clusters don't provide one. Declaring `onOff` (the same approach [homebridge-chargepoint](https://github.com/dacarson/homebridge-chargepoint) uses) gives Home that headline while the measurement clusters still populate the Energy view exactly as before.
+**Why a pure sensor and not an outlet:** this device type has no on/off cluster, so its tile in the Home app shows "Not Supported" as its headline status — Home's tile face wants a primary characteristic (on/off, a reading, etc.) to display, and a pure measurement cluster doesn't provide one. An earlier version of this feature used Matter's `OnOffOutlet` device type specifically to get a tile headline (the same approach [homebridge-chargepoint](https://github.com/dacarson/homebridge-chargepoint) uses), at the cost of declaring a fake on/off state that couldn't actually be switched. That tradeoff was reversed: the tile headline isn't worth carrying dead on/off state for, as long as the wattage still rolls into the Home aggregate and — via periodic energy, below — into each accessory's own Energy-view attribution, which it does either way.
 
 **Cumulative and periodic energy:** each meter reports both the lifetime total (`cumulativeEnergyImported`/`Exported`) and a periodic delta (`periodicEnergyImported`/`Exported`, at most once a minute) with its own start/end timestamps. The periodic figure is what drives Apple Home's per-device energy attribution in the Energy view, not the cumulative total alone.
 
@@ -246,6 +245,8 @@ Requirements:
 - An Apple Home setup on **iOS/tvOS 26 or later** for the Energy view itself
 
 If the Matter API isn't available (older Homebridge, or Matter not enabled), the plugin detects that, logs a single informational line, and continues to work exactly as before over HomeKit/Eve.
+
+**Upgrading from an earlier version:** since this changes the Matter device type (and merges Grid Import/Export into one accessory), Apple Home will likely need the old Matter tiles removed and the Matter bridge re-paired to pick up the new endpoints cleanly.
 
 ---
 

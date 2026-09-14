@@ -15,6 +15,7 @@ import { GridImportAccessory } from './gridImportAccessory';
 import { GridExportAccessory } from './gridExportAccessory';
 import { HomeConsumptionAccessory } from './homeConsumptionAccessory';
 import { createEveCharacteristics, EveChars } from './eveCharacteristics';
+import { MatterEnergyBridge } from './matterEnergy';
 import { discoverPVS6, PVS6DiscoveryResult } from './pvs6Discovery';
 import { loadDiscoveryCache, saveDiscoveryCache } from './pvs6DiscoveryCache';
 
@@ -43,6 +44,13 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   private gridImportAccessory?: GridImportAccessory;
   private gridExportAccessory?: GridExportAccessory;
   private homeConsumptionAccessory?: HomeConsumptionAccessory;
+
+  // Optional: publishes the grid meter over Matter as a single bidirectional
+  // accessory (signed activePower, both imported/exported energy on one
+  // cluster) — see matterEnergy.ts. Grid Import/Export stay separate
+  // accessories in Eve/HomeKit only, since that split is purely for Eve's
+  // characteristic limitation, not a Matter one.
+  private gridMatterBridge: MatterEnergyBridge | null = null;
 
   private pollTimer?: ReturnType<typeof setInterval>;
   private pollInFlight = false;
@@ -184,7 +192,6 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         FakeGatoHistoryService,
         importName,
         serialNumber,
-        matterEnabled,
       );
 
       const exportName = this.config.gridExportName ?? 'Grid Meter - Export';
@@ -195,8 +202,21 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         FakeGatoHistoryService,
         exportName,
         serialNumber,
-        matterEnabled,
       );
+
+      if (matterEnabled) {
+        const bridge = new MatterEnergyBridge(this.api, this.log, 'bidirectional');
+        if (bridge.isSupported()) {
+          this.gridMatterBridge = bridge;
+          bridge.register(`${serialNumber}-grid-net`, 'Grid', `${serialNumber}-grid`, {
+            powerW: 0,
+            importedEnergyKWh: 0,
+            exportedEnergyKWh: 0,
+          }).catch(() => {});
+        } else {
+          this.log.info('[matter] Config option "matter" is enabled, but the Matter API is unavailable. It needs a Homebridge build with the ElectricalSensor device type, with Matter enabled on this plugin\'s child bridge. Continuing with HomeKit/Eve only.');
+        }
+      }
     }
 
     // Home Consumption is optional (default: disabled).
@@ -324,6 +344,11 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         this.gridImportAccessory?.updateValues(reading);
         this.gridExportAccessory?.updateValues(reading);
         this.homeConsumptionAccessory?.updateValues(reading);
+        this.gridMatterBridge?.update({
+          powerW: reading.netPowerW,
+          importedEnergyKWh: reading.gridImportKWh,
+          exportedEnergyKWh: reading.gridExportKWh,
+        }).catch(() => {});
       } catch (err) {
         if (err instanceof HttpError) {
           if (err.statusCode === 401) {

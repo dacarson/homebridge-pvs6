@@ -1,10 +1,9 @@
 /**
  * matterEnergy.ts
  *
- * Publishes a PVS6 meter (solar, grid import, grid export, home consumption)
- * to Matter controllers as an outlet reporting live power and cumulative
- * energy, so it appears in the Apple Home Energy view (iOS 26+) with live
- * watts on its tile.
+ * Publishes a PVS6 meter (solar, grid, home consumption) to Matter
+ * controllers as an ElectricalSensor reporting live power and cumulative /
+ * periodic energy, so it feeds the Apple Home Energy view (iOS 26+).
  *
  * Background
  * ----------
@@ -14,29 +13,22 @@
  * also exposes (see eveCharacteristics.ts) are only ever read by Eve-class
  * apps and never populate the native Energy tile.
  *
- * Homebridge 2.2.0 added the ElectricalPowerMeasurement / ElectricalEnergyMeasurement
- * clusters to its Matter plugin API. A pure metering device type with no
- * actionable primary cluster (e.g. ElectricalSensor, declaring only the
- * measurement clusters) does register and its wattage does roll into the
- * Home app's room/home aggregate power total — but as verified live, its
- * tile shows "Not Supported" as the headline status, because Home's tile
- * face wants a primary characteristic (on/off, a sensor reading, etc.) to
- * show, and pure measurement clusters don't provide one. Declaring `onOff`
- * via the OnOffOutlet device type (the same approach homebridge-chargepoint
- * uses, confirmed working) gives Home that headline, while these clusters
- * still populate the Energy view exactly as before:
+ * Device type: ElectricalSensor, not OnOffOutlet
+ * -----------------------------------------------
+ * An earlier version of this feature declared these accessories as
+ * OnOffOutlet so their tile would show a headline status (a pure metering
+ * device type like ElectricalSensor has no actionable primary cluster, and
+ * its tile showed "Not Supported" as a result — confirmed live). That's
+ * reverted here: none of these meters are actually controllable, the on/off
+ * state was only ever a workaround for the tile headline, and the "Not
+ * Supported" tile is an accepted tradeoff as long as the wattage still rolls
+ * into the Home aggregate and (via PeriodicEnergy, below) into this
+ * accessory's own Energy-view attribution — which it does.
  *
- *   on       -> onOff.onOff                                             (bool)
- *   powerW   -> electricalPowerMeasurement.activePower                       (mW)
- *   energyKWh -> electricalEnergyMeasurement.cumulativeEnergyImported.energy  (mWh)
- *             or .cumulativeEnergyExported.energy, depending on this meter's
- *             direction (see EnergyDirection below).
- *
- * `on` mirrors each accessory's own HAP `On` characteristic exactly (true
- * when lastPowerW > 0) — see the matching logic in each *Accessory.ts file.
- * None of these meters are actually controllable, so a set command is
- * accepted (so the controller isn't left hanging) and logged as rejected;
- * the next poll pushes the true state back. See _rejectControl().
+ *   powerW    -> electricalPowerMeasurement.activePower                        (mW, signed)
+ *   energyKWh -> electricalEnergyMeasurement.cumulativeEnergyImported.energy   (mWh)
+ *             and/or .cumulativeEnergyExported.energy, depending on this
+ *             meter's direction (see EnergyDirection below).
  *
  * Matter expresses power in milliwatts and energy in milliwatt-hours, hence
  * the x1000 / x1,000,000 conversions. cumulativeEnergyImported/Exported are
@@ -51,10 +43,27 @@
  * numberOfMeasurementTypes) and the feature-gated ElectricalEnergyMeasurement
  * features from the declared state — declaring `cumulativeEnergyImported`
  * selects the ImportedEnergy + CumulativeEnergy features, `cumulativeEnergyExported`
- * selects ExportedEnergy + CumulativeEnergy. No voltage/current data is
+ * selects ExportedEnergy + CumulativeEnergy, and both together (for a
+ * bidirectional meter) select both pairs at once. No voltage/current data is
  * available from the PVS6 varserver reliably enough to publish, so only
  * activePower is declared; voltage/activeCurrent are optional per the
  * Matter spec and are simply omitted.
+ *
+ * Imported vs. exported energy is always two separate attributes
+ * ------------------------------------------------------------
+ * `activePower` is a signed attribute (positive = importing, negative =
+ * exporting), so a single bidirectional meter — the grid meter — can report
+ * live direction with one accessory. Cumulative/periodic *energy* has no
+ * equivalent signed "net" attribute, though: Imported and Exported are
+ * distinct lifetime running totals per the Matter spec (you don't want a
+ * day's production and consumption cancelling each other out), so a
+ * bidirectional meter still declares both `cumulativeEnergyImported` and
+ * `cumulativeEnergyExported` (and their periodic counterparts) together on
+ * the same cluster. See EnergyDirection's 'bidirectional' case below — this
+ * is how the grid meter is published as a single Matter accessory even
+ * though it remains two separate accessories in Eve/HomeKit (Grid Import /
+ * Grid Export), since that split is purely about Eve's inability to
+ * represent a negative watt value, not a Matter limitation.
  *
  * Cumulative vs. periodic energy
  * ------------------------------
@@ -74,7 +83,9 @@
  * last *periodic* baseline (not the last poll), throttled to at most once
  * per MIN_PERIODIC_INTERVAL_S so a short poll interval (default 10s, minimum
  * 5s) doesn't turn into excessive Matter event/state churn compared to a
- * device that naturally reports once a minute.
+ * device that naturally reports once a minute. A bidirectional meter tracks
+ * imported and exported baselines independently, since either can advance
+ * while the other sits idle.
  *
  * Requirements
  * ------------
@@ -87,11 +98,14 @@
  * false and the plugin runs HAP/Eve-only exactly as before.
  */
 import type { API, Logger } from 'homebridge';
-export type EnergyDirection = 'imported' | 'exported';
+export type EnergyDirection = 'imported' | 'exported' | 'bidirectional';
 export interface EnergyReadings {
-    on: boolean;
+    /** Signed for a 'bidirectional' meter (positive = importing, negative = exporting). */
     powerW: number;
-    energyKWh: number;
+    /** Required when direction is 'imported' or 'bidirectional'. */
+    importedEnergyKWh?: number;
+    /** Required when direction is 'exported' or 'bidirectional'. */
+    exportedEnergyKWh?: number;
 }
 export declare class MatterEnergyBridge {
     private readonly log;
@@ -99,12 +113,9 @@ export declare class MatterEnergyBridge {
     private static readonly MIN_PERIODIC_INTERVAL_S;
     private readonly api;
     private uuid;
-    private displayName;
     private registered;
     private warnedUpdate;
-    private lastPeriodicBaselineKWh;
-    private lastPeriodicTimestampS;
-    private lastPeriodic;
+    private periodicState;
     constructor(api: API, log: Logger, direction: EnergyDirection);
     /**
      * Whether this Homebridge build exposes everything needed to publish this
@@ -114,15 +125,16 @@ export declare class MatterEnergyBridge {
     private buildClusters;
     /**
      * Compute (or, between periodic reports, just return the last computed)
-     * periodic-energy fragment. The very first call — always from register(),
-     * before any real reading exists — seeds a zero-energy fragment with no
-     * timestamps, purely so the PeriodicEnergy feature composes at
-     * registration. Every call after that reports a real delta against the
-     * last periodic baseline once MIN_PERIODIC_INTERVAL_S has elapsed.
+     * periodic-energy fragment for one energy kind. The very first call —
+     * always from register(), before any real reading exists — seeds a
+     * zero-energy fragment with no timestamps, purely so the PeriodicEnergy
+     * feature composes at registration. Every call after that reports a real
+     * delta against the last periodic baseline once MIN_PERIODIC_INTERVAL_S
+     * has elapsed.
      */
     private computePeriodic;
     /**
-     * Register this meter as a Matter outlet with electrical measurements.
+     * Register this meter as a Matter electrical sensor.
      *
      * @param seedKey - unique per-meter key used to derive this accessory's
      * Matter UUID, distinct from the HAP accessory's UUID
@@ -131,7 +143,6 @@ export declare class MatterEnergyBridge {
      * @param readings - initial readings to seed the clusters with
      */
     register(seedKey: string, displayName: string, serialNumber: string, readings: EnergyReadings): Promise<boolean>;
-    private _rejectControl;
     /**
      * Push fresh readings to the registered Matter accessory. No-op until
      * registration has succeeded.

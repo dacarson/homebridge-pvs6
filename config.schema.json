@@ -39,7 +39,7 @@
         "title": "Show in the Apple Home Energy view (via Matter)",
         "type": "boolean",
         "default": false,
-        "description": "Also publish each enabled meter (Solar, Grid Import/Export, Home Consumption) over Matter as an electrical sensor with live power and cumulative energy, so it shows watts on its tile and feeds your home energy total. Requires Homebridge 2.3.0+ with Matter enabled on this plugin's child bridge; skipped safely otherwise."
+        "description": "Also publish Solar, Grid (import/export combined), and Home Consumption (if enabled) over Matter as electrical sensors with live power and cumulative/periodic energy, feeding your Apple Home Energy view. Requires Homebridge 2.3.0+ with Matter enabled on this plugin's child bridge; skipped safely otherwise."
       },
       "accessories": {
         "title": "Accessories",

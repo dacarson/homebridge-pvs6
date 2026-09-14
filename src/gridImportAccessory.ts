@@ -2,7 +2,6 @@ import { PlatformAccessory, Service } from 'homebridge';
 import { PVS6Platform } from './platform';
 import { PVS6Reading } from './pvs6Client';
 import { EVE_ENERGY_SERVICE_UUID } from './eveCharacteristics';
-import { MatterEnergyBridge } from './matterEnergy';
 
 export class GridImportAccessory {
   private readonly service: Service;
@@ -12,11 +11,6 @@ export class GridImportAccessory {
   private lastPowerW = 0;
   private lastEnergyKWh = 0;
 
-  // Optional: publishes this meter over Matter for the Apple Home Energy
-  // view. Null when the "matter" config option is off; also cleared when the
-  // Homebridge build doesn't support it. See matterEnergy.ts.
-  private matter: MatterEnergyBridge | null = null;
-
   constructor(
     private readonly platform: PVS6Platform,
     accessory: PlatformAccessory,
@@ -24,7 +18,6 @@ export class GridImportAccessory {
     FakeGatoHistoryService: any,
     displayName: string,
     serialNumber: string,
-    matterEnabled = false,
   ) {
     const { Characteristic } = platform;
     const { EveWatts, EveKWh } = platform.eveChars;
@@ -65,21 +58,6 @@ export class GridImportAccessory {
       .onGet(() => this.lastEnergyKWh);
 
     this.historyService = new FakeGatoHistoryService('energy', accessory, { storage: 'fs' });
-
-    if (matterEnabled) {
-      // Grid import flows into the meter — reported as imported energy.
-      const bridge = new MatterEnergyBridge(platform.api, platform.log, 'imported');
-      if (bridge.isSupported()) {
-        this.matter = bridge;
-        bridge.register(`${serialNumber}-grid-import`, displayName, `${serialNumber}-grid`, {
-          on: this.lastPowerW > 0,
-          powerW: this.lastPowerW,
-          energyKWh: this.lastEnergyKWh,
-        }).catch(() => {});
-      } else {
-        platform.log.info('[matter] Config option "matter" is enabled, but the Matter API is unavailable. It needs a Homebridge build with the OnOffOutlet device type, with Matter enabled on this plugin\'s child bridge. Continuing with HomeKit/Eve only.');
-      }
-    }
   }
 
   updateValues(reading: PVS6Reading): void {
@@ -99,8 +77,6 @@ export class GridImportAccessory {
       time: Math.round(Date.now() / 1000),
       power: this.lastPowerW,
     });
-
-    this.matter?.update({ on: this.lastPowerW > 0, powerW: this.lastPowerW, energyKWh: this.lastEnergyKWh }).catch(() => {});
 
     this.platform.log.debug(`Grid Import: ${this.lastPowerW}W  ${this.lastEnergyKWh}kWh`);
   }
