@@ -222,7 +222,7 @@ The derived kWh formula is exact without a battery: solar energy either goes to 
 
 Apple Home's native **Energy** view is driven by **Matter** electrical-measurement clusters, **not** by classic HomeKit/HAP characteristics. HAP has no power or energy characteristic at all, so the Eve characteristics above (which only Eve-class apps read) can never populate it — no matter how the HomeKit accessory is shaped.
 
-With `"matter": true`, this plugin publishes an **`ElectricalSensor`** Matter accessory for each enabled meter, carrying live power and cumulative/periodic energy — no on/off, no controllable state, purely metering. **Solar Production is the one exception**: it uses Matter's dedicated `SolarPowerDevice` type (spec §14.3) instead — an experimental path, since Homebridge's own plugin API doesn't expose a Solar-specific device type. It's imported directly from a separately pinned `@matter/main` dependency (version-locked to whatever Matter.js version this Homebridge build logs at startup) rather than going through `api.matter.deviceTypes`, so it's unsupported and could break on a future Homebridge upgrade that bumps its internal matter.js version out from under the pin.
+With `"matter": true`, this plugin publishes an **`ElectricalSensor`** Matter accessory for each enabled meter, carrying live power and cumulative/periodic energy — no on/off, no controllable state, purely metering:
 
 | Meter | Matter accessory | Matter power attribute | Matter energy attributes |
 |---|---|---|---|

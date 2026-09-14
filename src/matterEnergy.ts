@@ -25,24 +25,6 @@
  * into the Home aggregate and (via PeriodicEnergy, below) into this
  * accessory's own Energy-view attribution — which it does.
  *
- * Optional device-type override (EXPERIMENTAL)
- * ---------------------------------------------
- * The constructor accepts an optional deviceTypeOverride, used only by
- * solarAccessory.ts to substitute matter.js's real SolarPowerDevice (Matter
- * spec §14.3) in place of ElectricalSensor for the one meter that's
- * generation-only. Homebridge's own api.matter.deviceTypes doesn't expose a
- * Solar-specific type, so this bypasses that allowlist and imports the
- * device type directly from a separately pinned @matter/main dependency —
- * a distinct module instance from the one bundled inside Homebridge's own
- * Matter server. Prior art / empirical validation: branch
- * experiment/matter-solar-power-device-type (commit 6cd5488) confirmed this
- * registers and pairs correctly (no module-instance conflicts), but that
- * test predated PeriodicEnergy, so whether it changes how Apple Home
- * categorizes the accessory in the Energy tab is still an open question.
- * The @matter/main version pinned in package.json must track whatever
- * version Homebridge logs as "Matter.js vX.Y.Z" at startup, or this
- * conflates "different module instance" with "different library version".
- *
  *   powerW    -> electricalPowerMeasurement.activePower                        (mW, signed)
  *   energyKWh -> electricalEnergyMeasurement.cumulativeEnergyImported.energy   (mWh)
  *             and/or .cumulativeEnergyExported.energy, depending on this
@@ -217,9 +199,6 @@ export class MatterEnergyBridge {
     api: API,
     private readonly log: Logger,
     private readonly direction: EnergyDirection,
-    // EXPERIMENTAL — see the file header note above. When supplied, this
-    // device type is used instead of api.matter.deviceTypes.ElectricalSensor.
-    private readonly deviceTypeOverride?: unknown,
   ) {
     this.api = api as APIWithMatter;
   }
@@ -234,7 +213,7 @@ export class MatterEnergyBridge {
       this.log.debug('[matter] api.matter unavailable — Matter energy export disabled. Requires Homebridge 2.3.0+ with Matter enabled on this plugin\'s child bridge.');
       return false;
     }
-    if (!this.deviceTypeOverride && !matter.deviceTypes?.ElectricalSensor) {
+    if (!matter.deviceTypes?.ElectricalSensor) {
       this.log.debug('[matter] api.matter.deviceTypes.ElectricalSensor unavailable — Matter energy export disabled. Requires a newer Homebridge build.');
       return false;
     }
@@ -313,7 +292,7 @@ export class MatterEnergyBridge {
     const accessory: MatterAccessoryDefinition = {
       UUID: this.uuid,
       displayName,
-      deviceType: this.deviceTypeOverride ?? matter.deviceTypes.ElectricalSensor,
+      deviceType: matter.deviceTypes.ElectricalSensor,
       serialNumber,
       manufacturer: 'SunStrong',
       model: 'PVS6',

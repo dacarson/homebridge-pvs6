@@ -25,24 +25,6 @@
  * into the Home aggregate and (via PeriodicEnergy, below) into this
  * accessory's own Energy-view attribution — which it does.
  *
- * Optional device-type override (EXPERIMENTAL)
- * ---------------------------------------------
- * The constructor accepts an optional deviceTypeOverride, used only by
- * solarAccessory.ts to substitute matter.js's real SolarPowerDevice (Matter
- * spec §14.3) in place of ElectricalSensor for the one meter that's
- * generation-only. Homebridge's own api.matter.deviceTypes doesn't expose a
- * Solar-specific type, so this bypasses that allowlist and imports the
- * device type directly from a separately pinned @matter/main dependency —
- * a distinct module instance from the one bundled inside Homebridge's own
- * Matter server. Prior art / empirical validation: branch
- * experiment/matter-solar-power-device-type (commit 6cd5488) confirmed this
- * registers and pairs correctly (no module-instance conflicts), but that
- * test predated PeriodicEnergy, so whether it changes how Apple Home
- * categorizes the accessory in the Energy tab is still an open question.
- * The @matter/main version pinned in package.json must track whatever
- * version Homebridge logs as "Matter.js vX.Y.Z" at startup, or this
- * conflates "different module instance" with "different library version".
- *
  *   powerW    -> electricalPowerMeasurement.activePower                        (mW, signed)
  *   energyKWh -> electricalEnergyMeasurement.cumulativeEnergyImported.energy   (mWh)
  *             and/or .cumulativeEnergyExported.energy, depending on this
@@ -128,14 +110,13 @@ export interface EnergyReadings {
 export declare class MatterEnergyBridge {
     private readonly log;
     private readonly direction;
-    private readonly deviceTypeOverride?;
     private static readonly MIN_PERIODIC_INTERVAL_S;
     private readonly api;
     private uuid;
     private registered;
     private warnedUpdate;
     private periodicState;
-    constructor(api: API, log: Logger, direction: EnergyDirection, deviceTypeOverride?: unknown | undefined);
+    constructor(api: API, log: Logger, direction: EnergyDirection);
     /**
      * Whether this Homebridge build exposes everything needed to publish this
      * meter. Logs at debug level so unsupported builds stay quiet.
