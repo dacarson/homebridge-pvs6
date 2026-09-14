@@ -29,6 +29,7 @@ A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://su
 - Polls the PVS6 **local** FCGI API — no SunStrong Connect, no cloud dependency
 - **Auto-discovers** the PVS6 on your local network via mDNS — no IP address or serial number required in config
 - Automatically identifies production and consumption CT meters from the PVS6 device list
+- Optional: live watts in the Apple Home **Energy** view via Matter (see [Apple Home Energy & Matter](#apple-home-energy--matter))
 
 ---
 
@@ -64,7 +65,7 @@ Grid Import and Grid Export are always registered together — enabling `accesso
 
 ## Requirements
 
-- [Homebridge](https://homebridge.io) v2.0 or later
+- [Homebridge](https://homebridge.io) v2.0 or later (v2.3.0+ if you want the optional Apple Home Energy view via Matter)
 - Node.js 18 or later
 - SunStrong PVS6 on the same local network as your Homebridge host
 
@@ -134,6 +135,7 @@ Uncheck **Auto Discover** and supply the host and serial number directly. This s
       "host": "pvs.local",
       "serialNumber": "ZT231385000549A1234",
       "pollInterval": 10,
+      "matter": true,
       "accessories": {
         "grid": true,
         "homeConsumption": true
@@ -156,6 +158,7 @@ Uncheck **Auto Discover** and supply the host and serial number directly. This s
 | `host` | string | no* | — | IP address or hostname of the PVS6. Used only when `autoDiscover` is `false` |
 | `serialNumber` | string | no* | — | Full PVS6 serial number. The last 5 characters are used as the API password. Used only when `autoDiscover` is `false` |
 | `pollInterval` | integer | no | `10` | Seconds between polls. Minimum enforced: `5` |
+| `matter` | boolean | no | `false` | Also publish each enabled meter over Matter with live electrical measurements, so it shows watts on its tile in the Apple Home Energy view (see [Apple Home Energy & Matter](#apple-home-energy--matter)) |
 | `accessories.grid` | boolean | no | `true` | Enable the Grid Import + Grid Export accessory pair. Set `false` to disable both |
 | `accessories.homeConsumption` | boolean | no | `false` | Enable the Home Consumption accessory. Opt-in; off by default |
 | `solarName` | string | no | `"Solar Production"` | HomeKit display name for the Solar Production accessory |
@@ -212,6 +215,39 @@ Shows the total real-time load of the home and a derived lifetime consumption fi
 | Eve kWh | `pv_en + posLtea3phsumKwh − negLtea3phsumKwh` | Derived lifetime consumption — all solar generated, plus grid imported, minus grid exported |
 
 The derived kWh formula is exact without a battery: solar energy either goes to the home or the grid, so `pv_en − negLtea3phsumKwh` is the on-site solar consumed and `posLtea3phsumKwh` is the grid energy consumed. All three values already come from the existing livedata and meter caches — no additional API calls are required.
+
+---
+
+## Apple Home Energy & Matter
+
+Apple Home's native **Energy** view is driven by **Matter** electrical-measurement clusters, **not** by classic HomeKit/HAP characteristics. HAP has no power or energy characteristic at all, so the Eve characteristics above (which only Eve-class apps read) can never populate it — no matter how the HomeKit accessory is shaped.
+
+With `"matter": true`, this plugin publishes an **`ElectricalSensor`** Matter accessory for Solar Production and Grid, carrying live power and cumulative/periodic energy — no on/off, no controllable state, purely metering:
+
+| Meter | Matter accessory | Matter power attribute | Matter energy attributes |
+|---|---|---|---|
+| Solar Production | "Solar Production" | `electricalPowerMeasurement.activePower` (always negative — see below) | `electricalEnergyMeasurement.cumulativeEnergyExported` |
+| Grid | "Grid" | `electricalPowerMeasurement.activePower` (signed: positive = importing, negative = exporting) | `electricalEnergyMeasurement.cumulativeEnergyImported` **and** `cumulativeEnergyExported`, together |
+
+Power is sent in milliwatts, energy in milliwatt-hours, per the Matter spec. Matter's `activePower` sign convention is positive = the accessory is *drawing* power, negative = it's *supplying* power — Solar Production only ever supplies (so its wattage is negated before being sent), and Grid does both depending on live direction.
+
+**Home Consumption is intentionally not published over Matter.** Its energy is mathematically derived from the other two (`homeConsumptionKWh = pvEnergyKWh + gridImportKWh − gridExportKWh`, see [How It Works](#how-it-works)) rather than an independent measurement, so exposing all three to Apple Home's own aggregate power total risked double-counting rather than isolating grid draw. Home Consumption still works exactly as before in Eve/HomeKit.
+
+**Grid Import and Grid Export stay two separate accessories in Eve/HomeKit** (see [HomeKit Accessories](#homekit-accessories) below) — that split exists only because Eve's custom Energy characteristic can't represent a negative wattage. Matter's `activePower` attribute *is* signed, so on the Matter side the grid meter is published as a single **"Grid"** accessory instead, with power flipping sign as the meter crosses between importing and exporting. Matter's cumulative/periodic *energy* attributes have no equivalent signed "net" value — Imported and Exported are always separate running totals per the Matter spec — so the Grid accessory reports both simultaneously on the one accessory rather than needing two.
+
+**Why a pure sensor and not an outlet:** this device type has no on/off cluster, so its tile in the Home app shows "Not Supported" as its headline status — Home's tile face wants a primary characteristic (on/off, a reading, etc.) to display, and a pure measurement cluster doesn't provide one. An earlier version of this feature used Matter's `OnOffOutlet` device type specifically to get a tile headline (the same approach [homebridge-chargepoint](https://github.com/dacarson/homebridge-chargepoint) uses), at the cost of declaring a fake on/off state that couldn't actually be switched. That tradeoff was reversed: the tile headline isn't worth carrying dead on/off state for, as long as the wattage still rolls into the Home aggregate and — via periodic energy, below — into each accessory's own Energy-view attribution, which it does either way.
+
+**Cumulative and periodic energy:** each meter reports both the lifetime total (`cumulativeEnergyImported`/`Exported`) and a periodic delta (`periodicEnergyImported`/`Exported`, at most once a minute) with its own start/end timestamps. The periodic figure is what drives Apple Home's per-device energy attribution in the Energy view, not the cumulative total alone.
+
+Requirements:
+
+- **Homebridge 2.3.0 or later**
+- **Matter enabled on this plugin's child bridge** — in the Homebridge UI: plugin settings → **Bridge Settings** → enable Matter, then pair the Matter bridge in the Home app
+- An Apple Home setup on **iOS/tvOS 26 or later** for the Energy view itself
+
+If the Matter API isn't available (older Homebridge, or Matter not enabled), the plugin detects that, logs a single informational line, and continues to work exactly as before over HomeKit/Eve.
+
+**Upgrading from an earlier version:** since this changes the Matter device type (and merges Grid Import/Export into one accessory), Apple Home will likely need the old Matter tiles removed and the Matter bridge re-paired to pick up the new endpoints cleanly.
 
 ---
 

@@ -35,6 +35,12 @@
         "minimum": 5,
         "description": "How often to poll the PVS6 for new data. Minimum 5 seconds."
       },
+      "matter": {
+        "title": "Show in the Apple Home Energy view (via Matter)",
+        "type": "boolean",
+        "default": false,
+        "description": "Also publish Solar and Grid (import/export combined) over Matter as electrical sensors with live power and cumulative/periodic energy, feeding your Apple Home Energy view. Home Consumption is not published over Matter, since its energy is derived from Solar + Grid rather than an independent measurement. Requires Homebridge 2.3.0+ with Matter enabled on this plugin's child bridge; skipped safely otherwise."
+      },
       "accessories": {
         "title": "Accessories",
         "type": "object",

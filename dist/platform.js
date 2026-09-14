@@ -8,6 +8,7 @@ const gridImportAccessory_1 = require("./gridImportAccessory");
 const gridExportAccessory_1 = require("./gridExportAccessory");
 const homeConsumptionAccessory_1 = require("./homeConsumptionAccessory");
 const eveCharacteristics_1 = require("./eveCharacteristics");
+const matterEnergy_1 = require("./matterEnergy");
 const pvs6Discovery_1 = require("./pvs6Discovery");
 const pvs6DiscoveryCache_1 = require("./pvs6DiscoveryCache");
 const MIN_POLL_INTERVAL = 5;
@@ -19,6 +20,12 @@ const NETWORK_ERROR_LOG_INTERVAL_MS = 5 * 60 * 1000; // suppress repeat network 
 class PVS6Platform {
     constructor(log, config, api) {
         this.accessories = [];
+        // Optional: publishes the grid meter over Matter as a single bidirectional
+        // accessory (signed activePower, both imported/exported energy on one
+        // cluster) — see matterEnergy.ts. Grid Import/Export stay separate
+        // accessories in Eve/HomeKit only, since that split is purely for Eve's
+        // characteristic limitation, not a Matter one.
+        this.gridMatterBridge = null;
         this.pollInFlight = false;
         this.backedOff = false;
         this.consecutiveNetworkErrors = 0;
@@ -112,10 +119,11 @@ class PVS6Platform {
     setupAccessories(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     FakeGatoHistoryService, serialNumber) {
+        const matterEnabled = this.config.matter === true;
         // Solar Production is always registered.
         const solarName = this.config.solarName ?? 'Solar Production';
         const solarUuid = this.api.hap.uuid.generate(`${serialNumber}-solar`);
-        this.solarAccessory = new solarAccessory_1.SolarAccessory(this, this.getOrCreateAccessory(solarUuid, solarName), FakeGatoHistoryService, solarName, serialNumber);
+        this.solarAccessory = new solarAccessory_1.SolarAccessory(this, this.getOrCreateAccessory(solarUuid, solarName), FakeGatoHistoryService, solarName, serialNumber, matterEnabled);
         // Grid Import + Grid Export are registered together as an optional pair (default: enabled).
         if (this.config.accessories?.grid !== false) {
             const importName = this.config.gridName ?? 'Grid Meter - Import';
@@ -124,6 +132,20 @@ class PVS6Platform {
             const exportName = this.config.gridExportName ?? 'Grid Meter - Export';
             const exportUuid = this.api.hap.uuid.generate(`${serialNumber}-grid-export`);
             this.gridExportAccessory = new gridExportAccessory_1.GridExportAccessory(this, this.getOrCreateAccessory(exportUuid, exportName), FakeGatoHistoryService, exportName, serialNumber);
+            if (matterEnabled) {
+                const bridge = new matterEnergy_1.MatterEnergyBridge(this.api, this.log, 'bidirectional');
+                if (bridge.isSupported()) {
+                    this.gridMatterBridge = bridge;
+                    bridge.register(`${serialNumber}-grid-net`, 'Grid', `${serialNumber}-grid`, {
+                        powerW: 0,
+                        importedEnergyKWh: 0,
+                        exportedEnergyKWh: 0,
+                    }).catch(() => { });
+                }
+                else {
+                    this.log.info('[matter] Config option "matter" is enabled, but the Matter API is unavailable. It needs a Homebridge build with the ElectricalSensor device type, with Matter enabled on this plugin\'s child bridge. Continuing with HomeKit/Eve only.');
+                }
+            }
         }
         // Home Consumption is optional (default: disabled).
         if (this.config.accessories?.homeConsumption === true) {
@@ -240,6 +262,11 @@ class PVS6Platform {
                 this.gridImportAccessory?.updateValues(reading);
                 this.gridExportAccessory?.updateValues(reading);
                 this.homeConsumptionAccessory?.updateValues(reading);
+                this.gridMatterBridge?.update({
+                    powerW: reading.netPowerW,
+                    importedEnergyKWh: reading.gridImportKWh,
+                    exportedEnergyKWh: reading.gridExportKWh,
+                }).catch(() => { });
             }
             catch (err) {
                 if (err instanceof pvs6Client_1.HttpError) {

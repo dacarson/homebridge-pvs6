@@ -36,9 +36,10 @@ Homebridge (Node.js)
   └── homebridge-pvs6 plugin
         ├── PVS6Client                  — HTTP auth + varserver polling
         ├── SolarAccessory              — Eve Energy + fakegato history
-        ├── GridImportAccessory         — Eve Energy + fakegato history
+        ├── GridImportAccessory         — Eve Energy + fakegato history (optional)
         ├── GridExportAccessory         — Eve Energy + fakegato history (optional)
-        └── HomeConsumptionAccessory    — Eve Energy + fakegato history (optional)
+        ├── HomeConsumptionAccessory    — Eve Energy + fakegato history (optional)
+        └── MatterEnergyBridge          — one per enabled accessory above; publishes it as a Matter ElectricalSensor (opt-in via `matter: true`)
 ```
 
 ### PVS6Client
@@ -188,6 +189,47 @@ The derived value may accumulate minor drift over very long timeframes due to po
 
 ---
 
+## Matter Energy Reporting
+
+Optional, off by default (`matter: true` to enable). Implemented in `matterEnergy.ts`'s `MatterEnergyBridge` class, one instance per enabled Eve accessory (Solar, Grid Import, Grid Export, Home Consumption).
+
+**Why a separate mechanism from Eve:** Apple Home's native Energy view (iOS 26+) is driven by Matter's `ElectricalPowerMeasurement` / `ElectricalEnergyMeasurement` clusters, not by HAP characteristics. HAP has no native power/energy characteristic, so the Eve custom characteristics above are only ever read by Eve-class apps and never populate the native Energy tile — a Matter accessory is required in addition.
+
+**Device type:** `api.matter.deviceTypes.OnOffOutlet` — declaring an actionable `onOff` cluster alongside the measurement clusters, the same approach [homebridge-chargepoint](https://github.com/dacarson/homebridge-chargepoint) uses.
+
+An earlier version of this feature used `ElectricalSensor` (metering only, no on/off), on the theory that a pure sensor is a better semantic fit than an outlet for a meter that isn't switching anything, and it's technically a better fit. Live testing showed the tradeoff isn't worth it, though: the electrical-measurement data reached the Home app's room/home aggregate power total correctly either way, but `ElectricalSensor`'s tile showed "Not Supported" as its headline status — Home's tile face wants a primary characteristic (on/off, a reading, etc.) to display, and pure measurement clusters don't provide one. `OnOffOutlet` gives Home that headline while the measurement clusters still populate the Energy view exactly as before. (A related spike additionally tried Matter's dedicated `SolarPower` device type — spec §14.3 — for the Solar accessory specifically, imported directly since Homebridge doesn't expose it via `api.matter.deviceTypes`; see the `experiment/matter-solar-power-device-type` branch. That comparison was made during a session where pairing itself was broken, so it isn't a reliable data point either way and wasn't pursued further once `OnOffOutlet` proved sufficient.)
+
+**Clusters published per meter:**
+
+| Cluster attribute | Source | Unit | Notes |
+|---|---|---|---|
+| `onOff.onOff` | accessory's `lastPowerW > 0` | boolean | Mirrors the accessory's own Eve `On` characteristic exactly |
+| `electricalPowerMeasurement.activePower` | accessory's `lastPowerW` | mW (`W × 1000`) | Always declared; a plain number |
+| `electricalEnergyMeasurement.cumulativeEnergyImported.energy` | accessory's `lastEnergyKWh` | mWh (`kWh × 1,000,000`) | Grid Import, Home Consumption — lifetime total, energy flowing *into* the meter |
+| `electricalEnergyMeasurement.cumulativeEnergyExported.energy` | accessory's `lastEnergyKWh` | mWh (`kWh × 1,000,000`) | Solar, Grid Export — lifetime total, energy flowing *out of* the meter |
+| `electricalEnergyMeasurement.periodicEnergyImported` | delta since last periodic report | mWh, with `startTimestamp`/`endTimestamp` (Unix s) | Grid Import, Home Consumption — see below |
+| `electricalEnergyMeasurement.periodicEnergyExported` | delta since last periodic report | mWh, with `startTimestamp`/`endTimestamp` (Unix s) | Solar, Grid Export — see below |
+
+None of these meters are controllable. `register()` declares `handlers.onOff.on`/`.off` that accept an incoming set command (so the controller isn't left hanging), log it as rejected via `_rejectControl()`, and let the next poll's `update()` push the true state back — the same "accept, warn, revert" pattern the HAP `On` characteristic's `onSet` already uses.
+
+Each `MatterEnergyBridge` is fixed to one direction (`'imported'` or `'exported'`) at construction; only one of the imported/exported cumulative+periodic pairs is ever declared per meter. `cumulativeEnergyImported`/`cumulativeEnergyExported`/`periodicEnergyImported`/`periodicEnergyExported` are themselves structs (Matter's `EnergyMeasurementStruct`), not plain numbers — confirmed against a live Homebridge 2.4.0 test, where passing a flat number caused registration to fail with `Cannot manage number because it is not a struct`. Homebridge's `updateAccessoryState()` normalizes a flat number into that struct shape for convenience on the *update* path, but the *initial* state passed at `registerPlatformAccessories()` goes straight to matter.js's struct-typed attribute and must already be `{ energy: <mWh> }`. `buildClusters()` in `matterEnergy.ts` builds this shape once and uses it for both register() and update() so the two stay in sync. Homebridge derives the mandatory `powerMode`, `accuracy`, and `numberOfMeasurementTypes` cluster attributes automatically from the declared state — the plugin does not set them. No voltage/current data is published (see note in Data mapping about per-leg voltage not being surfaced by this plugin); `voltage` and `activeCurrent` are optional per the Matter spec and are simply omitted.
+
+**Cumulative vs. periodic energy:** the lifetime `cumulativeEnergyImported`/`Exported` total was the only energy attribute this feature originally declared. Per prior art in [homebridge-shelly-matter](https://github.com/keremerkan/homebridge-shelly-matter) (`shellyAccessory.ts`), the periodic delta — not the cumulative total — is what drives Apple Home's per-device energy attribution in the Energy view. Since Matter features compose once at registration (declaring `periodicEnergyImported`/`Exported` for the first time in a later `updateAccessoryState()` call would not retroactively add the PeriodicEnergy feature), `MatterEnergyBridge.computePeriodic()` seeds a zero-energy periodic fragment with no timestamps on its first call — always the one `register()` makes, before any real reading exists to diff against — then computes a real delta against the last periodic baseline (not the last poll) on every call after that, throttled to at most once per `MIN_PERIODIC_INTERVAL_S` (60s) so the plugin's short default poll interval (10s, minimum 5s) doesn't produce excessive Matter event/state churn compared to a device that naturally reports once a minute.
+
+**Matter UUID:** `matter.uuid.generate('homebridge-pvs6:matter:<key>')`, where `<key>` is `<serialNumber>-solar`, `<serialNumber>-grid-import`, `<serialNumber>-grid-export`, or `<serialNumber>-home` — distinct from each accessory's HAP UUID.
+
+**Feature detection:** `MatterEnergyBridge.isSupported()` checks for `api.matter`, `api.matter.deviceTypes.OnOffOutlet`, and the registration/update functions, logging at debug level and falling back to HAP/Eve-only when any are missing. Registration failures (thrown by `registerPlatformAccessories`) are caught and logged at warn level without affecting the HAP accessory. Per-poll update failures are logged once at warn, then throttled to debug, so a persistently failing Matter server can't flood the log.
+
+**Requirements:** Homebridge 2.3.0+, with Matter enabled on this plugin's child bridge (Homebridge UI → plugin settings → Bridge Settings → enable Matter).
+
+**Real-world commissioning notes:**
+
+- A Homebridge-side Matter child bridge "reset" generates a fresh passcode/discriminator — the old QR/manual code from before the reset is no longer valid.
+- Separately, after unpairing and re-pairing a bridge, a stuck PASE handshake (`Cannot manage number because it is not a struct` is unrelated; look instead for repeated `[Matter/PaseServer] An error occurred during PASE commissioning ... InvalidParam ... PasePake3`) was resolved in practice by rebooting the commissioning iPhone — likely stale HomeKit/Matter daemon session state on the phone, not a Homebridge or plugin issue. `bridge.bind` pinned to the actual active interface (e.g. `eth0` on a Pi with an inactive `wlan0` still administratively up) is also worth setting regardless, per Homebridge's own warning, though it did not turn out to be the cause here.
+- Switching an already-paired accessory's Matter device type (e.g. the `ElectricalSensor` → `OnOffOutlet` change above) requires unpairing and re-pairing the bridge — the endpoint composition itself changed, not just its state, so the previously-commissioned session can't just pick up the new shape. Confirmed live: after unpair/re-pair, all four tiles correctly showed live values instead of "Not Supported."
+
+---
+
 ## Configuration
 
 Configured via `config.json` in the Homebridge `platforms` array.
@@ -219,7 +261,7 @@ Standard config (solar + grid pair):
 }
 ```
 
-Full config (solar + grid pair + home consumption):
+Full config (solar + grid pair + home consumption + Matter energy reporting):
 
 ```json
 {
@@ -228,6 +270,7 @@ Full config (solar + grid pair + home consumption):
   "host": "192.168.1.x",
   "serialNumber": "ABCDE12345",
   "pollInterval": 10,
+  "matter": true,
   "solarName": "Solar Production",
   "gridName": "Grid Meter - Import",
   "gridExportName": "Grid Meter - Export",
@@ -246,6 +289,7 @@ Full config (solar + grid pair + home consumption):
 | `host` | string | yes | — | IP or hostname of PVS6 on local network |
 | `serialNumber` | string | yes | — | Full PVS6 serial number (password = last 5 chars) |
 | `pollInterval` | integer | no | `10` | Seconds between polls. Minimum enforced: `5` |
+| `matter` | boolean | no | `false` | Also publish each enabled meter over Matter as an `ElectricalSensor` for the Apple Home Energy view. Requires Homebridge 2.3.0+ with Matter enabled on this plugin's child bridge; skipped safely otherwise. See [Matter Energy Reporting](#matter-energy-reporting) |
 | `accessories.grid` | boolean | no | `true` | Enable the Grid Import + Grid Export accessory pair. Set `false` to disable both |
 | `accessories.homeConsumption` | boolean | no | `false` | Enable the Home Consumption accessory. Opt-in; off by default |
 | `solarName` | string | no | `"Solar Production"` | HomeKit display name for solar accessory |
@@ -308,7 +352,8 @@ homebridge-pvs6/
 │   ├── gridImportAccessory.ts          — Grid Import HomeKit accessory
 │   ├── gridExportAccessory.ts          — Grid Export HomeKit accessory (optional)
 │   ├── homeConsumptionAccessory.ts     — Home Consumption HomeKit accessory (optional)
-│   └── eveCharacteristics.ts           — Eve custom UUID definitions
+│   ├── eveCharacteristics.ts           — Eve custom UUID definitions
+│   └── matterEnergy.ts                 — MatterEnergyBridge: Matter ElectricalSensor export (optional)
 ├── config.schema.json
 ├── package.json
 ├── tsconfig.json
