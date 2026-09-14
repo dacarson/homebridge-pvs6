@@ -151,7 +151,7 @@ class PVS6Platform {
         if (this.config.accessories?.homeConsumption === true) {
             const homeName = this.config.homeConsumptionName ?? 'Home Consumption';
             const homeUuid = this.api.hap.uuid.generate(`${serialNumber}-home`);
-            this.homeConsumptionAccessory = new homeConsumptionAccessory_1.HomeConsumptionAccessory(this, this.getOrCreateAccessory(homeUuid, homeName), FakeGatoHistoryService, homeName, serialNumber, matterEnabled);
+            this.homeConsumptionAccessory = new homeConsumptionAccessory_1.HomeConsumptionAccessory(this, this.getOrCreateAccessory(homeUuid, homeName), FakeGatoHistoryService, homeName, serialNumber);
         }
     }
     getOrCreateAccessory(uuid, displayName) {

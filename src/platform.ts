@@ -229,7 +229,6 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         FakeGatoHistoryService,
         homeName,
         serialNumber,
-        matterEnabled,
       );
     }
   }

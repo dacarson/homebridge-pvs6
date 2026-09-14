@@ -2,7 +2,6 @@ import { PlatformAccessory, Service } from 'homebridge';
 import { PVS6Platform } from './platform';
 import { PVS6Reading } from './pvs6Client';
 import { EVE_ENERGY_SERVICE_UUID } from './eveCharacteristics';
-import { MatterEnergyBridge } from './matterEnergy';
 
 export class HomeConsumptionAccessory {
   private readonly service: Service;
@@ -12,11 +11,6 @@ export class HomeConsumptionAccessory {
   private lastPowerW = 0;
   private lastEnergyKWh = 0;
 
-  // Optional: publishes this meter over Matter for the Apple Home Energy
-  // view. Null when the "matter" config option is off; also cleared when the
-  // Homebridge build doesn't support it. See matterEnergy.ts.
-  private matter: MatterEnergyBridge | null = null;
-
   constructor(
     private readonly platform: PVS6Platform,
     accessory: PlatformAccessory,
@@ -24,7 +18,6 @@ export class HomeConsumptionAccessory {
     FakeGatoHistoryService: any,
     displayName: string,
     serialNumber: string,
-    matterEnabled = false,
   ) {
     const { Characteristic } = platform;
     const { EveWatts, EveKWh } = platform.eveChars;
@@ -65,20 +58,6 @@ export class HomeConsumptionAccessory {
       .onGet(() => this.lastEnergyKWh);
 
     this.historyService = new FakeGatoHistoryService('energy', accessory, { storage: 'fs' });
-
-    if (matterEnabled) {
-      // Home consumption flows into the meter — reported as imported energy.
-      const bridge = new MatterEnergyBridge(platform.api, platform.log, 'imported');
-      if (bridge.isSupported()) {
-        this.matter = bridge;
-        bridge.register(`${serialNumber}-home`, displayName, `${serialNumber}-home`, {
-          powerW: this.lastPowerW,
-          importedEnergyKWh: this.lastEnergyKWh,
-        }).catch(() => {});
-      } else {
-        platform.log.info('[matter] Config option "matter" is enabled, but the Matter API is unavailable. It needs a Homebridge build with the ElectricalSensor device type, with Matter enabled on this plugin\'s child bridge. Continuing with HomeKit/Eve only.');
-      }
-    }
   }
 
   updateValues(reading: PVS6Reading): void {
@@ -97,8 +76,6 @@ export class HomeConsumptionAccessory {
       time: Math.round(Date.now() / 1000),
       power: this.lastPowerW,
     });
-
-    this.matter?.update({ powerW: this.lastPowerW, importedEnergyKWh: this.lastEnergyKWh }).catch(() => {});
 
     this.platform.log.debug(`Home Consumption: ${this.lastPowerW}W  ${this.lastEnergyKWh.toFixed(3)}kWh`);
   }
