@@ -72,11 +72,14 @@ export class SolarAccessory {
 
     if (matterEnabled) {
       // Solar production flows out of the meter — reported as exported energy.
+      // Matter's activePower sign convention is positive = drawing power,
+      // negative = supplying it, so a generation-only meter like this one
+      // must negate its (always non-negative) wattage for Matter.
       const bridge = new MatterEnergyBridge(platform.api, platform.log, 'exported');
       if (bridge.isSupported()) {
         this.matter = bridge;
         bridge.register(`${serialNumber}-solar`, displayName, `${serialNumber}-solar`, {
-          powerW: this.lastPowerW,
+          powerW: -this.lastPowerW,
           exportedEnergyKWh: this.lastEnergyKWh,
         }).catch(() => {});
       } else {
@@ -102,7 +105,7 @@ export class SolarAccessory {
       power: this.lastPowerW,
     });
 
-    this.matter?.update({ powerW: this.lastPowerW, exportedEnergyKWh: this.lastEnergyKWh }).catch(() => {});
+    this.matter?.update({ powerW: -this.lastPowerW, exportedEnergyKWh: this.lastEnergyKWh }).catch(() => {});
 
     this.platform.log.debug(`Solar: ${this.lastPowerW}W  ${this.lastEnergyKWh}kWh`);
   }

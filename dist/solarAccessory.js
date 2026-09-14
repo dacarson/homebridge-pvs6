@@ -49,11 +49,14 @@ class SolarAccessory {
         this.historyService = new FakeGatoHistoryService('energy', accessory, { storage: 'fs' });
         if (matterEnabled) {
             // Solar production flows out of the meter — reported as exported energy.
+            // Matter's activePower sign convention is positive = drawing power,
+            // negative = supplying it, so a generation-only meter like this one
+            // must negate its (always non-negative) wattage for Matter.
             const bridge = new matterEnergy_1.MatterEnergyBridge(platform.api, platform.log, 'exported');
             if (bridge.isSupported()) {
                 this.matter = bridge;
                 bridge.register(`${serialNumber}-solar`, displayName, `${serialNumber}-solar`, {
-                    powerW: this.lastPowerW,
+                    powerW: -this.lastPowerW,
                     exportedEnergyKWh: this.lastEnergyKWh,
                 }).catch(() => { });
             }
@@ -75,7 +78,7 @@ class SolarAccessory {
             time: Math.round(Date.now() / 1000),
             power: this.lastPowerW,
         });
-        this.matter?.update({ powerW: this.lastPowerW, exportedEnergyKWh: this.lastEnergyKWh }).catch(() => { });
+        this.matter?.update({ powerW: -this.lastPowerW, exportedEnergyKWh: this.lastEnergyKWh }).catch(() => { });
         this.platform.log.debug(`Solar: ${this.lastPowerW}W  ${this.lastEnergyKWh}kWh`);
     }
 }

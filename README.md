@@ -226,11 +226,11 @@ With `"matter": true`, this plugin publishes an **`ElectricalSensor`** Matter ac
 
 | Meter | Matter accessory | Matter power attribute | Matter energy attributes |
 |---|---|---|---|
-| Solar Production | "Solar Production" | `electricalPowerMeasurement.activePower` | `electricalEnergyMeasurement.cumulativeEnergyExported` |
+| Solar Production | "Solar Production" | `electricalPowerMeasurement.activePower` (always negative — see below) | `electricalEnergyMeasurement.cumulativeEnergyExported` |
 | Grid | "Grid" | `electricalPowerMeasurement.activePower` (signed: positive = importing, negative = exporting) | `electricalEnergyMeasurement.cumulativeEnergyImported` **and** `cumulativeEnergyExported`, together |
-| Home Consumption | "Home Consumption" | `electricalPowerMeasurement.activePower` | `electricalEnergyMeasurement.cumulativeEnergyImported` |
+| Home Consumption | "Home Consumption" | `electricalPowerMeasurement.activePower` (always positive) | `electricalEnergyMeasurement.cumulativeEnergyImported` |
 
-Power is sent in milliwatts, energy in milliwatt-hours, per the Matter spec.
+Power is sent in milliwatts, energy in milliwatt-hours, per the Matter spec. Matter's `activePower` sign convention is positive = the accessory is *drawing* power, negative = it's *supplying* power — Home Consumption only ever draws, Solar Production only ever supplies (so its wattage is negated before being sent), and Grid does both depending on live direction.
 
 **Grid Import and Grid Export stay two separate accessories in Eve/HomeKit** (see [HomeKit Accessories](#homekit-accessories) below) — that split exists only because Eve's custom Energy characteristic can't represent a negative wattage. Matter's `activePower` attribute *is* signed, so on the Matter side the grid meter is published as a single **"Grid"** accessory instead, with power flipping sign as the meter crosses between importing and exporting. Matter's cumulative/periodic *energy* attributes have no equivalent signed "net" value — Imported and Exported are always separate running totals per the Matter spec — so the Grid accessory reports both simultaneously on the one accessory rather than needing two.
 
