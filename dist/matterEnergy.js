@@ -77,16 +77,19 @@
  * features compose once at registration, so PeriodicEnergy must already be
  * present in the *initial* cluster state passed to registerPlatformAccessories()
  * — declaring it for the first time in a later updateAccessoryState() call
- * would not retroactively add the feature. buildClusters() therefore seeds a
- * zero-energy periodic fragment (no timestamps yet) on its very first call,
- * which is always the one register() makes, before any real reading exists
- * to diff against; every call after that computes a real delta against the
- * last *periodic* baseline (not the last poll), throttled to at most once
- * per MIN_PERIODIC_INTERVAL_S so a short poll interval (default 10s, minimum
- * 5s) doesn't turn into excessive Matter event/state churn compared to a
- * device that naturally reports once a minute. A bidirectional meter tracks
- * imported and exported baselines independently, since either can advance
- * while the other sits idle.
+ * would not retroactively add the feature. register() therefore seeds a
+ * zero-energy periodic fragment (no timestamps).
+ *
+ * Event rate
+ * ----------
+ * Homebridge sends every electricalEnergyMeasurement update through
+ * matter.js setMeasurement(), which emits a CumulativeEnergyMeasured /
+ * PeriodicEnergyMeasured event for each energy field passed — changed or
+ * not. update() therefore asks EnergyEventScheduler (energyEvents.ts) which
+ * fields are due: cumulative totals only when they change or every 15
+ * minutes, and periodic energy summed into 15-minute periods (sent early
+ * when an idle direction becomes active). Live activePower is unaffected
+ * and still updates on every poll; it is a plain attribute with no event.
  *
  * Requirements
  * ------------
@@ -100,17 +103,13 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MatterEnergyBridge = void 0;
+const energyEvents_1 = require("./energyEvents");
 const PLUGIN_NAME = 'homebridge-pvs6';
 const PLATFORM_NAME = 'PVS6';
 /** Matter expresses power in milliwatts. */
 function wToMilliW(value) {
     const n = Number(value);
     return Number.isFinite(n) ? Math.round(n * 1000) : 0;
-}
-/** Matter expresses energy in milliwatt-hours; PVS6 readings are in kWh. */
-function kWhToMilliWh(value) {
-    const n = Number(value);
-    return Number.isFinite(n) ? Math.round(Math.max(0, n) * 1000000) : 0;
 }
 class MatterEnergyBridge {
     constructor(api, log, direction) {
@@ -119,14 +118,11 @@ class MatterEnergyBridge {
         this.uuid = null;
         this.registered = false;
         this.warnedUpdate = false;
-        // Periodic-energy bookkeeping — see the "Cumulative vs. periodic energy"
-        // note at the top of this file. Tracked per energy kind so a bidirectional
-        // meter can advance its imported and exported deltas independently.
-        this.periodicState = {
-            imported: { baselineKWh: null, timestampS: null, last: { energy: 0 } },
-            exported: { baselineKWh: null, timestampS: null, last: { energy: 0 } },
-        };
         this.api = api;
+        this.energyEvents = new energyEvents_1.EnergyEventScheduler(this.kinds());
+    }
+    kinds() {
+        return this.direction === 'bidirectional' ? ['imported', 'exported'] : [this.direction];
     }
     /**
      * Whether this Homebridge build exposes everything needed to publish this
@@ -148,49 +144,25 @@ class MatterEnergyBridge {
         }
         return true;
     }
-    buildClusters(r) {
+    // Initial cluster state for registration: cumulative totals plus a
+    // zero-energy periodic seed so the PeriodicEnergy feature composes.
+    initialClusters(r) {
         const energyField = {};
-        if (this.direction === 'imported' || this.direction === 'bidirectional') {
-            energyField.cumulativeEnergyImported = { energy: kWhToMilliWh(r.importedEnergyKWh ?? 0) };
-            energyField.periodicEnergyImported = this.computePeriodic('imported', r.importedEnergyKWh ?? 0);
-        }
-        if (this.direction === 'exported' || this.direction === 'bidirectional') {
-            energyField.cumulativeEnergyExported = { energy: kWhToMilliWh(r.exportedEnergyKWh ?? 0) };
-            energyField.periodicEnergyExported = this.computePeriodic('exported', r.exportedEnergyKWh ?? 0);
+        const seed = { energy: 0 };
+        for (const kind of this.kinds()) {
+            if (kind === 'imported') {
+                energyField.cumulativeEnergyImported = { energy: (0, energyEvents_1.kWhToMilliWh)(r.importedEnergyKWh ?? 0) };
+                energyField.periodicEnergyImported = seed;
+            }
+            else {
+                energyField.cumulativeEnergyExported = { energy: (0, energyEvents_1.kWhToMilliWh)(r.exportedEnergyKWh ?? 0) };
+                energyField.periodicEnergyExported = seed;
+            }
         }
         return {
             electricalPowerMeasurement: { activePower: wToMilliW(r.powerW) },
             electricalEnergyMeasurement: energyField,
         };
-    }
-    /**
-     * Compute (or, between periodic reports, just return the last computed)
-     * periodic-energy fragment for one energy kind. The very first call —
-     * always from register(), before any real reading exists — seeds a
-     * zero-energy fragment with no timestamps, purely so the PeriodicEnergy
-     * feature composes at registration. Every call after that reports a real
-     * delta against the last periodic baseline once MIN_PERIODIC_INTERVAL_S
-     * has elapsed.
-     */
-    computePeriodic(kind, energyKWh) {
-        const state = this.periodicState[kind];
-        const nowS = Math.floor(Date.now() / 1000);
-        if (state.baselineKWh === null || state.timestampS === null) {
-            state.baselineKWh = energyKWh;
-            state.timestampS = nowS;
-            return state.last;
-        }
-        if (nowS - state.timestampS >= MatterEnergyBridge.MIN_PERIODIC_INTERVAL_S) {
-            const deltaKWh = Math.max(0, energyKWh - state.baselineKWh);
-            state.last = {
-                energy: kWhToMilliWh(deltaKWh),
-                startTimestamp: state.timestampS,
-                endTimestamp: nowS,
-            };
-            state.baselineKWh = energyKWh;
-            state.timestampS = nowS;
-        }
-        return state.last;
     }
     /**
      * Register this meter as a Matter electrical sensor.
@@ -213,7 +185,7 @@ class MatterEnergyBridge {
             serialNumber,
             manufacturer: 'SunStrong',
             model: 'PVS6',
-            clusters: this.buildClusters(readings),
+            clusters: this.initialClusters(readings),
         };
         try {
             await matter.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
@@ -237,12 +209,19 @@ class MatterEnergyBridge {
         const matter = this.api.matter;
         if (!matter)
             return;
-        const clusters = this.buildClusters(readings);
+        const updates = [
+            matter.updateAccessoryState(this.uuid, 'electricalPowerMeasurement', { activePower: wToMilliW(readings.powerW) }),
+        ];
+        // Only the energy fields that are due — each one sent emits a Matter event.
+        const energy = this.energyEvents.next({
+            imported: readings.importedEnergyKWh,
+            exported: readings.exportedEnergyKWh,
+        });
+        if (energy) {
+            updates.push(matter.updateAccessoryState(this.uuid, 'electricalEnergyMeasurement', energy));
+        }
         try {
-            await Promise.all([
-                matter.updateAccessoryState(this.uuid, 'electricalPowerMeasurement', clusters.electricalPowerMeasurement),
-                matter.updateAccessoryState(this.uuid, 'electricalEnergyMeasurement', clusters.electricalEnergyMeasurement),
-            ]);
+            await Promise.all(updates);
         }
         catch (err) {
             // Log the first failure at warn, the rest at debug, so a persistently
@@ -259,5 +238,4 @@ class MatterEnergyBridge {
     }
 }
 exports.MatterEnergyBridge = MatterEnergyBridge;
-MatterEnergyBridge.MIN_PERIODIC_INTERVAL_S = 60;
 //# sourceMappingURL=matterEnergy.js.map

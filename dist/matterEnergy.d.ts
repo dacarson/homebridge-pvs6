@@ -76,16 +76,19 @@
  * features compose once at registration, so PeriodicEnergy must already be
  * present in the *initial* cluster state passed to registerPlatformAccessories()
  * — declaring it for the first time in a later updateAccessoryState() call
- * would not retroactively add the feature. buildClusters() therefore seeds a
- * zero-energy periodic fragment (no timestamps yet) on its very first call,
- * which is always the one register() makes, before any real reading exists
- * to diff against; every call after that computes a real delta against the
- * last *periodic* baseline (not the last poll), throttled to at most once
- * per MIN_PERIODIC_INTERVAL_S so a short poll interval (default 10s, minimum
- * 5s) doesn't turn into excessive Matter event/state churn compared to a
- * device that naturally reports once a minute. A bidirectional meter tracks
- * imported and exported baselines independently, since either can advance
- * while the other sits idle.
+ * would not retroactively add the feature. register() therefore seeds a
+ * zero-energy periodic fragment (no timestamps).
+ *
+ * Event rate
+ * ----------
+ * Homebridge sends every electricalEnergyMeasurement update through
+ * matter.js setMeasurement(), which emits a CumulativeEnergyMeasured /
+ * PeriodicEnergyMeasured event for each energy field passed — changed or
+ * not. update() therefore asks EnergyEventScheduler (energyEvents.ts) which
+ * fields are due: cumulative totals only when they change or every 15
+ * minutes, and periodic energy summed into 15-minute periods (sent early
+ * when an idle direction becomes active). Live activePower is unaffected
+ * and still updates on every poll; it is a plain attribute with no event.
  *
  * Requirements
  * ------------
@@ -110,29 +113,19 @@ export interface EnergyReadings {
 export declare class MatterEnergyBridge {
     private readonly log;
     private readonly direction;
-    private static readonly MIN_PERIODIC_INTERVAL_S;
     private readonly api;
     private uuid;
     private registered;
     private warnedUpdate;
-    private periodicState;
+    private readonly energyEvents;
     constructor(api: API, log: Logger, direction: EnergyDirection);
+    private kinds;
     /**
      * Whether this Homebridge build exposes everything needed to publish this
      * meter. Logs at debug level so unsupported builds stay quiet.
      */
     isSupported(): boolean;
-    private buildClusters;
-    /**
-     * Compute (or, between periodic reports, just return the last computed)
-     * periodic-energy fragment for one energy kind. The very first call —
-     * always from register(), before any real reading exists — seeds a
-     * zero-energy fragment with no timestamps, purely so the PeriodicEnergy
-     * feature composes at registration. Every call after that reports a real
-     * delta against the last periodic baseline once MIN_PERIODIC_INTERVAL_S
-     * has elapsed.
-     */
-    private computePeriodic;
+    private initialClusters;
     /**
      * Register this meter as a Matter electrical sensor.
      *

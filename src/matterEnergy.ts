@@ -76,16 +76,19 @@
  * features compose once at registration, so PeriodicEnergy must already be
  * present in the *initial* cluster state passed to registerPlatformAccessories()
  * — declaring it for the first time in a later updateAccessoryState() call
- * would not retroactively add the feature. buildClusters() therefore seeds a
- * zero-energy periodic fragment (no timestamps yet) on its very first call,
- * which is always the one register() makes, before any real reading exists
- * to diff against; every call after that computes a real delta against the
- * last *periodic* baseline (not the last poll), throttled to at most once
- * per MIN_PERIODIC_INTERVAL_S so a short poll interval (default 10s, minimum
- * 5s) doesn't turn into excessive Matter event/state churn compared to a
- * device that naturally reports once a minute. A bidirectional meter tracks
- * imported and exported baselines independently, since either can advance
- * while the other sits idle.
+ * would not retroactively add the feature. register() therefore seeds a
+ * zero-energy periodic fragment (no timestamps).
+ *
+ * Event rate
+ * ----------
+ * Homebridge sends every electricalEnergyMeasurement update through
+ * matter.js setMeasurement(), which emits a CumulativeEnergyMeasured /
+ * PeriodicEnergyMeasured event for each energy field passed — changed or
+ * not. update() therefore asks EnergyEventScheduler (energyEvents.ts) which
+ * fields are due: cumulative totals only when they change or every 15
+ * minutes, and periodic energy summed into 15-minute periods (sent early
+ * when an idle direction becomes active). Live activePower is unaffected
+ * and still updates on every poll; it is a plain attribute with no event.
  *
  * Requirements
  * ------------
@@ -99,6 +102,7 @@
  */
 
 import type { API, Logger } from 'homebridge';
+import { EnergyClusterFragment, EnergyEventScheduler, EnergyKind, EnergyStruct, kWhToMilliWh } from './energyEvents';
 
 const PLUGIN_NAME = 'homebridge-pvs6';
 const PLATFORM_NAME = 'PVS6';
@@ -107,12 +111,6 @@ const PLATFORM_NAME = 'PVS6';
 function wToMilliW(value: number): number {
   const n = Number(value);
   return Number.isFinite(n) ? Math.round(n * 1000) : 0;
-}
-
-/** Matter expresses energy in milliwatt-hours; PVS6 readings are in kWh. */
-function kWhToMilliWh(value: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? Math.round(Math.max(0, n) * 1_000_000) : 0;
 }
 
 // Which way energy flows through this meter, from the meter's own point of
@@ -130,26 +128,9 @@ export interface EnergyReadings {
   exportedEnergyKWh?: number;
 }
 
-// Matter's EnergyMeasurementStruct. `energy` (mWh) is mandatory;
-// startTimestamp/endTimestamp (Unix seconds — matter.js converts to Matter's
-// native epoch-s) are omitted for a not-yet-measured seed value and present
-// once a real interval has been measured.
-interface EnergyStruct {
-  energy: number;
-  startTimestamp?: number;
-  endTimestamp?: number;
-}
-
-type EnergyKind = 'imported' | 'exported';
-
 interface MatterAccessoryClusters {
   electricalPowerMeasurement: { activePower: number };
-  electricalEnergyMeasurement: {
-    cumulativeEnergyImported?: EnergyStruct;
-    periodicEnergyImported?: EnergyStruct;
-    cumulativeEnergyExported?: EnergyStruct;
-    periodicEnergyExported?: EnergyStruct;
-  };
+  electricalEnergyMeasurement: EnergyClusterFragment;
 }
 
 interface MatterAccessoryDefinition {
@@ -180,20 +161,13 @@ interface MatterAPILike {
 type APIWithMatter = API & { matter?: MatterAPILike };
 
 export class MatterEnergyBridge {
-  private static readonly MIN_PERIODIC_INTERVAL_S = 60;
-
   private readonly api: APIWithMatter;
   private uuid: string | null = null;
   private registered = false;
   private warnedUpdate = false;
 
-  // Periodic-energy bookkeeping — see the "Cumulative vs. periodic energy"
-  // note at the top of this file. Tracked per energy kind so a bidirectional
-  // meter can advance its imported and exported deltas independently.
-  private periodicState: Record<EnergyKind, { baselineKWh: number | null; timestampS: number | null; last: EnergyStruct }> = {
-    imported: { baselineKWh: null, timestampS: null, last: { energy: 0 } },
-    exported: { baselineKWh: null, timestampS: null, last: { energy: 0 } },
-  };
+  // Decides which energy fields (and so which Matter events) each update sends.
+  private readonly energyEvents: EnergyEventScheduler;
 
   constructor(
     api: API,
@@ -201,6 +175,11 @@ export class MatterEnergyBridge {
     private readonly direction: EnergyDirection,
   ) {
     this.api = api as APIWithMatter;
+    this.energyEvents = new EnergyEventScheduler(this.kinds());
+  }
+
+  private kinds(): EnergyKind[] {
+    return this.direction === 'bidirectional' ? ['imported', 'exported'] : [this.direction];
   }
 
   /**
@@ -224,55 +203,25 @@ export class MatterEnergyBridge {
     return true;
   }
 
-  private buildClusters(r: EnergyReadings): MatterAccessoryClusters {
-    const energyField: MatterAccessoryClusters['electricalEnergyMeasurement'] = {};
-
-    if (this.direction === 'imported' || this.direction === 'bidirectional') {
-      energyField.cumulativeEnergyImported = { energy: kWhToMilliWh(r.importedEnergyKWh ?? 0) };
-      energyField.periodicEnergyImported = this.computePeriodic('imported', r.importedEnergyKWh ?? 0);
-    }
-    if (this.direction === 'exported' || this.direction === 'bidirectional') {
-      energyField.cumulativeEnergyExported = { energy: kWhToMilliWh(r.exportedEnergyKWh ?? 0) };
-      energyField.periodicEnergyExported = this.computePeriodic('exported', r.exportedEnergyKWh ?? 0);
+  // Initial cluster state for registration: cumulative totals plus a
+  // zero-energy periodic seed so the PeriodicEnergy feature composes.
+  private initialClusters(r: EnergyReadings): MatterAccessoryClusters {
+    const energyField: EnergyClusterFragment = {};
+    const seed: EnergyStruct = { energy: 0 };
+    for (const kind of this.kinds()) {
+      if (kind === 'imported') {
+        energyField.cumulativeEnergyImported = { energy: kWhToMilliWh(r.importedEnergyKWh ?? 0) };
+        energyField.periodicEnergyImported = seed;
+      } else {
+        energyField.cumulativeEnergyExported = { energy: kWhToMilliWh(r.exportedEnergyKWh ?? 0) };
+        energyField.periodicEnergyExported = seed;
+      }
     }
 
     return {
       electricalPowerMeasurement: { activePower: wToMilliW(r.powerW) },
       electricalEnergyMeasurement: energyField,
     };
-  }
-
-  /**
-   * Compute (or, between periodic reports, just return the last computed)
-   * periodic-energy fragment for one energy kind. The very first call —
-   * always from register(), before any real reading exists — seeds a
-   * zero-energy fragment with no timestamps, purely so the PeriodicEnergy
-   * feature composes at registration. Every call after that reports a real
-   * delta against the last periodic baseline once MIN_PERIODIC_INTERVAL_S
-   * has elapsed.
-   */
-  private computePeriodic(kind: EnergyKind, energyKWh: number): EnergyStruct {
-    const state = this.periodicState[kind];
-    const nowS = Math.floor(Date.now() / 1000);
-
-    if (state.baselineKWh === null || state.timestampS === null) {
-      state.baselineKWh = energyKWh;
-      state.timestampS = nowS;
-      return state.last;
-    }
-
-    if (nowS - state.timestampS >= MatterEnergyBridge.MIN_PERIODIC_INTERVAL_S) {
-      const deltaKWh = Math.max(0, energyKWh - state.baselineKWh);
-      state.last = {
-        energy: kWhToMilliWh(deltaKWh),
-        startTimestamp: state.timestampS,
-        endTimestamp: nowS,
-      };
-      state.baselineKWh = energyKWh;
-      state.timestampS = nowS;
-    }
-
-    return state.last;
   }
 
   /**
@@ -296,7 +245,7 @@ export class MatterEnergyBridge {
       serialNumber,
       manufacturer: 'SunStrong',
       model: 'PVS6',
-      clusters: this.buildClusters(readings),
+      clusters: this.initialClusters(readings),
     };
 
     try {
@@ -320,13 +269,20 @@ export class MatterEnergyBridge {
     const matter = this.api.matter;
     if (!matter) return;
 
-    const clusters = this.buildClusters(readings);
+    const updates = [
+      matter.updateAccessoryState(this.uuid, 'electricalPowerMeasurement', { activePower: wToMilliW(readings.powerW) }),
+    ];
+    // Only the energy fields that are due — each one sent emits a Matter event.
+    const energy = this.energyEvents.next({
+      imported: readings.importedEnergyKWh,
+      exported: readings.exportedEnergyKWh,
+    });
+    if (energy) {
+      updates.push(matter.updateAccessoryState(this.uuid, 'electricalEnergyMeasurement', energy));
+    }
 
     try {
-      await Promise.all([
-        matter.updateAccessoryState(this.uuid, 'electricalPowerMeasurement', clusters.electricalPowerMeasurement),
-        matter.updateAccessoryState(this.uuid, 'electricalEnergyMeasurement', clusters.electricalEnergyMeasurement),
-      ]);
+      await Promise.all(updates);
     } catch (err) {
       // Log the first failure at warn, the rest at debug, so a persistently
       // unhappy Matter server can't flood the log on every poll.

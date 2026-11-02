@@ -8,6 +8,6 @@
     "sourceMap": false,
     "types": ["node"]
   },
-  "include": ["src/throttle.ts", "test/"],
+  "include": ["src/throttle.ts", "src/energyEvents.ts", "test/"],
   "exclude": []
 }

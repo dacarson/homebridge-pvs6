@@ -186,7 +186,7 @@ With `throttleUpdates` on (the default), an Eve Watts update is sent only when o
 - the value crosses to or from 0, for example when export stops
 - `maxIntervalSeconds` has passed since the last update for that accessory
 
-Throttling only affects the events pushed to HomeKit. When an app reads an accessory, it always gets the latest reading. Eve kWh, fakegato history and Matter updates are not throttled, and the first value after startup is always sent.
+Throttling only affects the events pushed to HomeKit. When an app reads an accessory, it always gets the latest reading. Eve kWh, fakegato history and Matter live power are not throttled (Matter energy has its own fixed schedule; see [Apple Home Energy & Matter](#apple-home-energy--matter)), and the first value after startup is always sent.
 
 Throttling also adds hysteresis to the Solar Production **On** switch so it doesn't flicker on and off at sunrise and sunset. It turns on above 50 W and off below 20 W, and each state is held for at least 5 minutes.
 
@@ -268,7 +268,9 @@ Power is sent in milliwatts, energy in milliwatt-hours, per the Matter spec. Mat
 
 **Why a pure sensor and not an outlet:** this device type has no on/off cluster, so its tile in the Home app shows "Not Supported" as its headline status — Home's tile face wants a primary characteristic (on/off, a reading, etc.) to display, and a pure measurement cluster doesn't provide one. An earlier version of this feature used Matter's `OnOffOutlet` device type specifically to get a tile headline (the same approach [homebridge-chargepoint](https://github.com/dacarson/homebridge-chargepoint) uses), at the cost of declaring a fake on/off state that couldn't actually be switched. That tradeoff was reversed: the tile headline isn't worth carrying dead on/off state for, as long as the wattage still rolls into the Home aggregate and — via periodic energy, below — into each accessory's own Energy-view attribution, which it does either way.
 
-**Cumulative and periodic energy:** each meter reports both the lifetime total (`cumulativeEnergyImported`/`Exported`) and a periodic delta (`periodicEnergyImported`/`Exported`, at most once a minute) with its own start/end timestamps. The periodic figure is what drives Apple Home's per-device energy attribution in the Energy view, not the cumulative total alone.
+**Cumulative and periodic energy:** each meter reports both the lifetime total (`cumulativeEnergyImported`/`Exported`) and a periodic delta (`periodicEnergyImported`/`Exported`) with its own start/end timestamps. The periodic figure is what drives Apple Home's per-device energy attribution in the Energy view, not the cumulative total alone.
+
+**Energy reporting rate:** every energy update records a Matter event, so the plugin doesn't send one on every poll. The lifetime total is sent when it changes, and at least every 15 minutes even if it hasn't. Periodic energy is added up across polls and sent as one 15-minute period. A period is sent early when a direction that was idle starts recording energy, such as at sunrise or when the grid switches from exporting to importing, so new activity shows up right away. Live power (`activePower`) still updates on every poll. This behaviour is always on and isn't affected by `throttleUpdates`.
 
 Requirements:
 
