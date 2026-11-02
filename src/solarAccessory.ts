@@ -3,6 +3,7 @@ import { PVS6Platform } from './platform';
 import { PVS6Reading } from './pvs6Client';
 import { EVE_ENERGY_SERVICE_UUID } from './eveCharacteristics';
 import { MatterEnergyBridge } from './matterEnergy';
+import { SolarOnHysteresis } from './throttle';
 
 export class SolarAccessory {
   private readonly service: Service;
@@ -11,6 +12,9 @@ export class SolarAccessory {
 
   private lastPowerW = 0;
   private lastEnergyKWh = 0;
+
+  // Only used when throttling is enabled: stops On flapping at sunrise/sunset.
+  private readonly onHysteresis: SolarOnHysteresis | null;
 
   // Optional: publishes this meter over Matter for the Apple Home Energy
   // view. Null when the "matter" config option is off; also cleared when the
@@ -44,13 +48,15 @@ export class SolarAccessory {
 
     this.service.setCharacteristic(Characteristic.Name, displayName);
 
+    this.onHysteresis = platform.powerThrottle.enabled ? new SolarOnHysteresis() : null;
+
     // On = true when solar is producing.
     // HAP's On is read/write; the setter reverts to the polled state immediately.
     this.service
       .getCharacteristic(Characteristic.On)
-      .onGet(() => this.lastPowerW > 0)
+      .onGet(() => this.isOn())
       .onSet(async () => {
-        this.service.updateCharacteristic(Characteristic.On, this.lastPowerW > 0);
+        this.service.updateCharacteristic(Characteristic.On, this.isOn());
       });
 
     // OutletInUse is required for Eve Energy to render correctly
@@ -88,6 +94,10 @@ export class SolarAccessory {
     }
   }
 
+  private isOn(): boolean {
+    return this.onHysteresis ? this.onHysteresis.isOn : this.lastPowerW > 0;
+  }
+
   updateValues(reading: PVS6Reading): void {
     const { Characteristic } = this.platform;
     const { EveWatts, EveKWh } = this.platform.eveChars;
@@ -95,9 +105,13 @@ export class SolarAccessory {
     this.lastPowerW = reading.pvPowerW;
     this.lastEnergyKWh = reading.pvEnergyKWh;
 
-    this.service.updateCharacteristic(Characteristic.On, this.lastPowerW > 0);
+    const on = this.onHysteresis ? this.onHysteresis.update(this.lastPowerW) : this.lastPowerW > 0;
+    this.service.updateCharacteristic(Characteristic.On, on);
     this.service.updateCharacteristic(Characteristic.OutletInUse, true);
-    this.service.updateCharacteristic(EveWatts, this.lastPowerW);
+    // Throttled (see throttle.ts); onGet above still returns the newest reading.
+    if (this.platform.powerThrottle.shouldSend('solar.watts', this.lastPowerW)) {
+      this.service.updateCharacteristic(EveWatts, this.lastPowerW);
+    }
     this.service.updateCharacteristic(EveKWh, this.lastEnergyKWh);
 
     this.historyService.addEntry({

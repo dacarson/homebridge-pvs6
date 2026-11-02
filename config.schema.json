@@ -41,6 +41,42 @@
         "default": false,
         "description": "Also publish Solar and Grid (import/export combined) over Matter as electrical sensors with live power and cumulative/periodic energy, feeding your Apple Home Energy view. Home Consumption is not published over Matter, since its energy is derived from Solar + Grid rather than an independent measurement. Requires Homebridge 2.3.0+ with Matter enabled on this plugin's child bridge; skipped safely otherwise."
       },
+      "throttleUpdates": {
+        "title": "Throttle power updates",
+        "type": "boolean",
+        "default": true,
+        "description": "Only send an Eve Watts update to HomeKit when the power has changed meaningfully, crossed to/from 0, or the heartbeat interval has passed. Also adds hysteresis to the Solar Production On switch (on above 50 W, off below 20 W, each state held at least 5 minutes). Turn off to send every poll, as in earlier versions."
+      },
+      "minChangeWatts": {
+        "title": "Minimum change (W)",
+        "type": "number",
+        "default": 25,
+        "minimum": 0,
+        "description": "Send an update when power has changed by at least this many watts (or the percentage below, whichever is larger) since the last value sent.",
+        "condition": {
+          "functionBody": "return model.throttleUpdates !== false;"
+        }
+      },
+      "minChangePercent": {
+        "title": "Minimum change (%)",
+        "type": "number",
+        "default": 2,
+        "minimum": 0,
+        "description": "Send an update when power has changed by at least this percentage of the last value sent (or the watts above, whichever is larger).",
+        "condition": {
+          "functionBody": "return model.throttleUpdates !== false;"
+        }
+      },
+      "maxIntervalSeconds": {
+        "title": "Heartbeat interval (seconds)",
+        "type": "integer",
+        "default": 300,
+        "minimum": 0,
+        "description": "Send the current power anyway once this long has passed since the last update, even if it hasn't changed much.",
+        "condition": {
+          "functionBody": "return model.throttleUpdates !== false;"
+        }
+      },
       "accessories": {
         "title": "Accessories",
         "type": "object",
@@ -84,5 +120,31 @@
       }
     },
     "required": []
-  }
+  },
+  "layout": [
+    "name",
+    "autoDiscover",
+    "host",
+    "serialNumber",
+    "pollInterval",
+    "matter",
+    {
+      "type": "fieldset",
+      "title": "Throttling",
+      "expandable": true,
+      "expanded": false,
+      "description": "Reduce how many HomeKit events the plugin sends for power readings.",
+      "items": [
+        "throttleUpdates",
+        "minChangeWatts",
+        "minChangePercent",
+        "maxIntervalSeconds"
+      ]
+    },
+    "accessories",
+    "solarName",
+    "gridName",
+    "gridExportName",
+    "homeConsumptionName"
+  ]
 }

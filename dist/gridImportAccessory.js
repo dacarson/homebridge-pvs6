@@ -47,7 +47,10 @@ class GridImportAccessory {
         this.lastEnergyKWh = reading.gridImportKWh;
         this.service.updateCharacteristic(Characteristic.On, this.lastPowerW > 0);
         this.service.updateCharacteristic(Characteristic.OutletInUse, true);
-        this.service.updateCharacteristic(EveWatts, this.lastPowerW);
+        // Throttled (see throttle.ts); onGet above still returns the newest reading.
+        if (this.platform.powerThrottle.shouldSend('grid-import.watts', this.lastPowerW)) {
+            this.service.updateCharacteristic(EveWatts, this.lastPowerW);
+        }
         this.service.updateCharacteristic(EveKWh, this.lastEnergyKWh);
         this.historyService.addEntry({
             time: Math.round(Date.now() / 1000),

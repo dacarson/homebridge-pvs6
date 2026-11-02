@@ -18,6 +18,7 @@ import { createEveCharacteristics, EveChars } from './eveCharacteristics';
 import { MatterEnergyBridge } from './matterEnergy';
 import { discoverPVS6, PVS6DiscoveryResult } from './pvs6Discovery';
 import { loadDiscoveryCache, saveDiscoveryCache } from './pvs6DiscoveryCache';
+import { PowerThrottle, resolveThrottleConfig } from './throttle';
 
 const MIN_POLL_INTERVAL = 5;
 const AUTH_RETRY_MS = 30_000;
@@ -25,6 +26,7 @@ const AUTH_BACKOFF_MS = 60_000;
 const OVERLOAD_BACKOFF_MS = 15_000;
 const REDISCOVERY_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
 const NETWORK_ERROR_LOG_INTERVAL_MS = 5 * 60 * 1000; // suppress repeat network error logs within 5 min
+const THROTTLE_STATS_INTERVAL_MS = 60 * 60 * 1000; // hourly sent/suppressed summary
 
 export class PVS6Platform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
@@ -32,6 +34,8 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   public readonly api: API;
   public readonly eveChars: EveChars;
   public readonly log: Logger;
+  // Shared by all accessories for Eve Watts updates; see throttle.ts.
+  public readonly powerThrottle: PowerThrottle;
 
   public readonly accessories: PlatformAccessory[] = [];
 
@@ -53,6 +57,7 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   private gridMatterBridge: MatterEnergyBridge | null = null;
 
   private pollTimer?: ReturnType<typeof setInterval>;
+  private throttleStatsTimer?: ReturnType<typeof setInterval>;
   private pollInFlight = false;
   private backedOff = false;
   private consecutiveNetworkErrors = 0;
@@ -86,6 +91,20 @@ export class PVS6Platform implements DynamicPlatformPlugin {
     }
     this.pollIntervalMs = pollInterval * 1000;
 
+    const throttleConfig = resolveThrottleConfig(pvs6Config);
+    this.powerThrottle = new PowerThrottle(throttleConfig, msg => this.log.debug(msg));
+    if (throttleConfig.enabled) {
+      this.log.info(
+        `Power update throttling on: min change ${throttleConfig.minChangeWatts}W / ${throttleConfig.minChangePercent}%, ` +
+        `heartbeat ${throttleConfig.maxIntervalSeconds}s`,
+      );
+      this.throttleStatsTimer = setInterval(() => {
+        const { sent, suppressed } = this.powerThrottle.takeStats();
+        this.log.debug(`Power updates in the last hour: ${sent} sent, ${suppressed} suppressed`);
+      }, THROTTLE_STATS_INTERVAL_MS);
+      this.throttleStatsTimer.unref?.();
+    }
+
     this.log.info('Finished initializing platform:', config.name ?? PLATFORM_NAME);
 
     this.api.on('didFinishLaunching', () => {
@@ -106,6 +125,9 @@ export class PVS6Platform implements DynamicPlatformPlugin {
     this.api.on('shutdown', () => {
       if (this.pollTimer) {
         clearInterval(this.pollTimer);
+      }
+      if (this.throttleStatsTimer) {
+        clearInterval(this.throttleStatsTimer);
       }
     });
   }

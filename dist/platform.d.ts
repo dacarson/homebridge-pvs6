@@ -1,11 +1,13 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 import { EveChars } from './eveCharacteristics';
+import { PowerThrottle } from './throttle';
 export declare class PVS6Platform implements DynamicPlatformPlugin {
     readonly Service: typeof Service;
     readonly Characteristic: typeof Characteristic;
     readonly api: API;
     readonly eveChars: EveChars;
     readonly log: Logger;
+    readonly powerThrottle: PowerThrottle;
     readonly accessories: PlatformAccessory[];
     private client;
     private readonly config;
@@ -16,6 +18,7 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private homeConsumptionAccessory?;
     private gridMatterBridge;
     private pollTimer?;
+    private throttleStatsTimer?;
     private pollInFlight;
     private backedOff;
     private consecutiveNetworkErrors;

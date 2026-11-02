@@ -11,12 +11,14 @@ const eveCharacteristics_1 = require("./eveCharacteristics");
 const matterEnergy_1 = require("./matterEnergy");
 const pvs6Discovery_1 = require("./pvs6Discovery");
 const pvs6DiscoveryCache_1 = require("./pvs6DiscoveryCache");
+const throttle_1 = require("./throttle");
 const MIN_POLL_INTERVAL = 5;
 const AUTH_RETRY_MS = 30000;
 const AUTH_BACKOFF_MS = 60000;
 const OVERLOAD_BACKOFF_MS = 15000;
 const REDISCOVERY_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
 const NETWORK_ERROR_LOG_INTERVAL_MS = 5 * 60 * 1000; // suppress repeat network error logs within 5 min
+const THROTTLE_STATS_INTERVAL_MS = 60 * 60 * 1000; // hourly sent/suppressed summary
 class PVS6Platform {
     constructor(log, config, api) {
         this.accessories = [];
@@ -48,6 +50,17 @@ class PVS6Platform {
             pollInterval = MIN_POLL_INTERVAL;
         }
         this.pollIntervalMs = pollInterval * 1000;
+        const throttleConfig = (0, throttle_1.resolveThrottleConfig)(pvs6Config);
+        this.powerThrottle = new throttle_1.PowerThrottle(throttleConfig, msg => this.log.debug(msg));
+        if (throttleConfig.enabled) {
+            this.log.info(`Power update throttling on: min change ${throttleConfig.minChangeWatts}W / ${throttleConfig.minChangePercent}%, ` +
+                `heartbeat ${throttleConfig.maxIntervalSeconds}s`);
+            this.throttleStatsTimer = setInterval(() => {
+                const { sent, suppressed } = this.powerThrottle.takeStats();
+                this.log.debug(`Power updates in the last hour: ${sent} sent, ${suppressed} suppressed`);
+            }, THROTTLE_STATS_INTERVAL_MS);
+            this.throttleStatsTimer.unref?.();
+        }
         this.log.info('Finished initializing platform:', config.name ?? settings_1.PLATFORM_NAME);
         this.api.on('didFinishLaunching', () => {
             this.log.debug('didFinishLaunching — resolving config, setting up accessories');
@@ -66,6 +79,9 @@ class PVS6Platform {
         this.api.on('shutdown', () => {
             if (this.pollTimer) {
                 clearInterval(this.pollTimer);
+            }
+            if (this.throttleStatsTimer) {
+                clearInterval(this.throttleStatsTimer);
             }
         });
     }

@@ -7,6 +7,10 @@ export interface PVS6Config extends PlatformConfig {
     serialNumber?: string;
     pollInterval?: number;
     matter?: boolean;
+    throttleUpdates?: boolean;
+    minChangeWatts?: number;
+    minChangePercent?: number;
+    maxIntervalSeconds?: number;
     accessories?: {
         grid?: boolean;
         homeConsumption?: boolean;

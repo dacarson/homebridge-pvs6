@@ -136,6 +136,10 @@ Uncheck **Auto Discover** and supply the host and serial number directly. This s
       "serialNumber": "ZT231385000549A1234",
       "pollInterval": 10,
       "matter": true,
+      "throttleUpdates": true,
+      "minChangeWatts": 25,
+      "minChangePercent": 2,
+      "maxIntervalSeconds": 300,
       "accessories": {
         "grid": true,
         "homeConsumption": true
@@ -159,6 +163,10 @@ Uncheck **Auto Discover** and supply the host and serial number directly. This s
 | `serialNumber` | string | no* | — | Full PVS6 serial number. The last 5 characters are used as the API password. Used only when `autoDiscover` is `false` |
 | `pollInterval` | integer | no | `10` | Seconds between polls. Minimum enforced: `5` |
 | `matter` | boolean | no | `false` | Also publish each enabled meter over Matter with live electrical measurements, so it shows watts on its tile in the Apple Home Energy view (see [Apple Home Energy & Matter](#apple-home-energy--matter)) |
+| `throttleUpdates` | boolean | no | `true` | Only send Eve Watts updates when the power changes meaningfully, and add hysteresis to the Solar Production On switch. See [Update Throttling](#update-throttling). Set `false` to send every poll |
+| `minChangeWatts` | number | no | `25` | Throttling: minimum change in watts before an update is sent |
+| `minChangePercent` | number | no | `2` | Throttling: minimum change as a percentage of the last value sent. The larger of this and `minChangeWatts` applies |
+| `maxIntervalSeconds` | number | no | `300` | Throttling: send the current value anyway once this many seconds have passed since the last update |
 | `accessories.grid` | boolean | no | `true` | Enable the Grid Import + Grid Export accessory pair. Set `false` to disable both |
 | `accessories.homeConsumption` | boolean | no | `false` | Enable the Home Consumption accessory. Opt-in; off by default |
 | `solarName` | string | no | `"Solar Production"` | HomeKit display name for the Solar Production accessory |
@@ -167,6 +175,22 @@ Uncheck **Auto Discover** and supply the host and serial number directly. This s
 | `homeConsumptionName` | string | no | `"Home Consumption"` | HomeKit display name for the Home Consumption accessory |
 
 \* Required when `autoDiscover` is `false`.
+
+### Update Throttling
+
+The PVS6 is polled every ~10 seconds, and each reading differs from the last by a few watts. Without throttling, every poll sends a HomeKit event for each Eve Watts value (Solar Production, Home Consumption, Grid Import and Grid Export). That adds up to about 1,000 events per hour.
+
+With `throttleUpdates` on (the default), an Eve Watts update is sent only when one of these is true:
+
+- the value has changed by at least `max(minChangeWatts, minChangePercent% of the last value sent)` since the last update sent. With the defaults that is 25 W below 1,250 W and 2% above it
+- the value crosses to or from 0, for example when export stops
+- `maxIntervalSeconds` has passed since the last update for that accessory
+
+Throttling only affects the events pushed to HomeKit. When an app reads an accessory, it always gets the latest reading. Eve kWh, fakegato history and Matter updates are not throttled, and the first value after startup is always sent.
+
+Throttling also adds hysteresis to the Solar Production **On** switch so it doesn't flicker on and off at sunrise and sunset. It turns on above 50 W and off below 20 W, and each state is held for at least 5 minutes.
+
+At debug level, each suppressed update is logged, and once an hour a single line reports how many updates were sent and how many were suppressed. Setting `throttleUpdates` to `false` restores the previous behaviour, where every poll is sent.
 
 ### Finding Your Serial Number
 
@@ -180,7 +204,7 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 
 | Characteristic | Source | Notes |
 |---|---|---|
-| On | `pv_p > 0` | True when panels are actively generating |
+| On | `pv_p > 0` | True when panels are actively generating. With throttling on: turns on above 50 W, off below 20 W, each state held ≥ 5 min |
 | OutletInUse | Always `true` | Required by Eve Energy |
 | Eve Watts | `pv_p × 1000` | Real-time solar output in Watts |
 | Eve kWh | `pv_en` | Lifetime generation in kWh |
@@ -281,6 +305,12 @@ git clone https://github.com/dacarson/homebridge-pvs6.git
 cd homebridge-pvs6
 npm install
 npm run build
+```
+
+To run the unit tests:
+
+```bash
+npm test
 ```
 
 To develop with live rebuilds:

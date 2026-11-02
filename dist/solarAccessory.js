@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SolarAccessory = void 0;
 const eveCharacteristics_1 = require("./eveCharacteristics");
 const matterEnergy_1 = require("./matterEnergy");
+const throttle_1 = require("./throttle");
 class SolarAccessory {
     constructor(platform, accessory, 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -26,13 +27,14 @@ class SolarAccessory {
         this.service = existingService ??
             accessory.addService(new platform.api.hap.Service(displayName, eveCharacteristics_1.EVE_ENERGY_SERVICE_UUID));
         this.service.setCharacteristic(Characteristic.Name, displayName);
+        this.onHysteresis = platform.powerThrottle.enabled ? new throttle_1.SolarOnHysteresis() : null;
         // On = true when solar is producing.
         // HAP's On is read/write; the setter reverts to the polled state immediately.
         this.service
             .getCharacteristic(Characteristic.On)
-            .onGet(() => this.lastPowerW > 0)
+            .onGet(() => this.isOn())
             .onSet(async () => {
-            this.service.updateCharacteristic(Characteristic.On, this.lastPowerW > 0);
+            this.service.updateCharacteristic(Characteristic.On, this.isOn());
         });
         // OutletInUse is required for Eve Energy to render correctly
         this.service
@@ -65,14 +67,21 @@ class SolarAccessory {
             }
         }
     }
+    isOn() {
+        return this.onHysteresis ? this.onHysteresis.isOn : this.lastPowerW > 0;
+    }
     updateValues(reading) {
         const { Characteristic } = this.platform;
         const { EveWatts, EveKWh } = this.platform.eveChars;
         this.lastPowerW = reading.pvPowerW;
         this.lastEnergyKWh = reading.pvEnergyKWh;
-        this.service.updateCharacteristic(Characteristic.On, this.lastPowerW > 0);
+        const on = this.onHysteresis ? this.onHysteresis.update(this.lastPowerW) : this.lastPowerW > 0;
+        this.service.updateCharacteristic(Characteristic.On, on);
         this.service.updateCharacteristic(Characteristic.OutletInUse, true);
-        this.service.updateCharacteristic(EveWatts, this.lastPowerW);
+        // Throttled (see throttle.ts); onGet above still returns the newest reading.
+        if (this.platform.powerThrottle.shouldSend('solar.watts', this.lastPowerW)) {
+            this.service.updateCharacteristic(EveWatts, this.lastPowerW);
+        }
         this.service.updateCharacteristic(EveKWh, this.lastEnergyKWh);
         this.historyService.addEntry({
             time: Math.round(Date.now() / 1000),
