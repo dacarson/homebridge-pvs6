@@ -2,11 +2,15 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  DEFAULT_THROTTLE_CONFIG,
-  PowerThrottle,
-  resolveThrottleConfig,
-  SolarOnHysteresis,
-  ThrottleConfig,
+  DEFAULT_UPDATE_CONFIG,
+  EVE_HEARTBEAT_MS,
+  EveUpdatePolicy,
+  PowerSwitch,
+  resolveUpdateConfig,
+  SWITCH_OFF_BELOW_W,
+  SWITCH_ON_ABOVE_W,
+  UpdateConfig,
+  UpdateStats,
 } from '../src/throttle';
 
 // Fake clock so heartbeat/hold timing is deterministic.
@@ -18,192 +22,256 @@ function clock(start = 1_000_000) {
   };
 }
 
-function makeThrottle(overrides: Partial<ThrottleConfig> = {}) {
+function makePolicy(overrides: Partial<UpdateConfig> = {}) {
   const c = clock();
   const debug: string[] = [];
-  const throttle = new PowerThrottle(
-    { ...DEFAULT_THROTTLE_CONFIG, ...overrides },
-    msg => debug.push(msg),
-    c.now,
-  );
-  return { throttle, clock: c, debug };
+  const stats = new UpdateStats();
+  const policy = new EveUpdatePolicy({ ...DEFAULT_UPDATE_CONFIG, ...overrides }, stats, msg => debug.push(msg), c.now);
+  return { policy, stats, clock: c, debug };
 }
 
-describe('PowerThrottle', () => {
-  it('always sends the first value for a key (startup)', () => {
-    const { throttle } = makeThrottle();
-    assert.equal(throttle.shouldSend('solar.watts', 1234), true);
-    assert.equal(throttle.shouldSend('grid-import.watts', 0), true);
+describe('EveUpdatePolicy — throttled (default)', () => {
+  it('is the default mode and keeps NOTIFY', () => {
+    const { policy } = makePolicy();
+    assert.equal(policy.mode, 'throttled');
+    assert.equal(policy.notify, true);
   });
 
-  describe('threshold', () => {
-    it('uses minChangeWatts when it is larger than the percentage', () => {
-      // 2% of 500 W = 10 W, so the 25 W floor applies.
-      const { throttle } = makeThrottle();
-      throttle.shouldSend('k', 500);
-      assert.equal(throttle.shouldSend('k', 524), false);
-      assert.equal(throttle.shouldSend('k', 476), false);
-      assert.equal(throttle.shouldSend('k', 525), true);
-    });
-
-    it('uses minChangePercent when it is larger than the watts', () => {
-      // 2% of 5000 W = 100 W.
-      const { throttle } = makeThrottle();
-      throttle.shouldSend('k', 5000);
-      assert.equal(throttle.shouldSend('k', 5099), false);
-      assert.equal(throttle.shouldSend('k', 4901), false);
-      assert.equal(throttle.shouldSend('k', 5100), true);
-    });
-
-    it('measures change against the last value sent, not the last reading', () => {
-      const { throttle } = makeThrottle();
-      throttle.shouldSend('k', 500);
-      // Slow drift: each step is small, but the total eventually crosses 25 W.
-      assert.equal(throttle.shouldSend('k', 510), false);
-      assert.equal(throttle.shouldSend('k', 520), false);
-      assert.equal(throttle.shouldSend('k', 530), true);
-      // Baseline is now 530.
-      assert.equal(throttle.shouldSend('k', 540), false);
-    });
-
-    it('tracks keys independently', () => {
-      const { throttle } = makeThrottle();
-      throttle.shouldSend('a', 500);
-      throttle.shouldSend('b', 1000);
-      assert.equal(throttle.shouldSend('a', 530), true);
-      assert.equal(throttle.shouldSend('b', 1010), false);
-    });
+  it('always pushes the first value for a key (startup)', () => {
+    const { policy } = makePolicy();
+    assert.equal(policy.shouldPush('solar.watts', 'watts', 1234), true);
+    assert.equal(policy.shouldPush('solar.kwh', 'kwh', 5000), true);
+    assert.equal(policy.shouldPush('grid-import.watts', 'watts', 0), true);
   });
 
-  describe('zero crossing', () => {
-    it('sends when a value drops to 0, even below the threshold', () => {
-      const { throttle } = makeThrottle();
-      throttle.shouldSend('k', 10);
-      assert.equal(throttle.shouldSend('k', 0), true);
-    });
-
-    it('sends when a value rises from 0, even below the threshold', () => {
-      const { throttle } = makeThrottle();
-      throttle.shouldSend('k', 0);
-      assert.equal(throttle.shouldSend('k', 3), true);
-    });
-
-    it('suppresses repeated zeros', () => {
-      const { throttle } = makeThrottle();
-      throttle.shouldSend('k', 0);
-      assert.equal(throttle.shouldSend('k', 0), false);
-    });
+  it('watts: uses minChangeWatts when it is larger than the percentage', () => {
+    // 2% of 500 W = 10 W, so the 25 W floor applies.
+    const { policy } = makePolicy();
+    policy.shouldPush('k', 'watts', 500);
+    assert.equal(policy.shouldPush('k', 'watts', 524), false);
+    assert.equal(policy.shouldPush('k', 'watts', 476), false);
+    assert.equal(policy.shouldPush('k', 'watts', 525), true);
   });
 
-  describe('heartbeat', () => {
-    it('sends an unchanged value once maxIntervalSeconds has passed', () => {
-      const { throttle, clock: c } = makeThrottle();
-      throttle.shouldSend('k', 500);
-      c.advance(299);
-      assert.equal(throttle.shouldSend('k', 501), false);
-      c.advance(1);
-      assert.equal(throttle.shouldSend('k', 501), true);
-      // Heartbeat resets on send.
-      c.advance(10);
-      assert.equal(throttle.shouldSend('k', 502), false);
-    });
-
-    it('suppressed readings do not reset the heartbeat timer', () => {
-      const { throttle, clock: c } = makeThrottle({ maxIntervalSeconds: 60 });
-      throttle.shouldSend('k', 500);
-      for (let i = 0; i < 5; i++) {
-        c.advance(10);
-        assert.equal(throttle.shouldSend('k', 500), false);
-      }
-      c.advance(10);
-      assert.equal(throttle.shouldSend('k', 500), true);
-    });
+  it('watts: uses minChangePercent when it is larger than the watts', () => {
+    // 2% of 5000 W = 100 W.
+    const { policy } = makePolicy();
+    policy.shouldPush('k', 'watts', 5000);
+    assert.equal(policy.shouldPush('k', 'watts', 5099), false);
+    assert.equal(policy.shouldPush('k', 'watts', 5100), true);
   });
 
-  describe('disabled', () => {
-    it('sends every value and records nothing', () => {
-      const { throttle, debug } = makeThrottle({ enabled: false });
-      assert.equal(throttle.enabled, false);
-      for (const v of [500, 500, 501, 0, 0, 1]) {
-        assert.equal(throttle.shouldSend('k', v), true);
-      }
-      assert.deepEqual(throttle.takeStats(), { sent: 0, suppressed: 0 });
-      assert.equal(debug.length, 0);
-    });
+  it('watts: small changes near zero wait for the threshold or heartbeat', () => {
+    const { policy } = makePolicy();
+    policy.shouldPush('k', 'watts', 10);
+    assert.equal(policy.shouldPush('k', 'watts', 0), false);
   });
 
-  it('counts sent vs suppressed, logs suppressions, and resets stats', () => {
-    const { throttle, debug } = makeThrottle();
-    throttle.shouldSend('k', 500); // sent
-    throttle.shouldSend('k', 505); // suppressed
-    throttle.shouldSend('k', 510); // suppressed
-    throttle.shouldSend('k', 600); // sent
-    assert.deepEqual(throttle.takeStats(), { sent: 2, suppressed: 2 });
-    assert.deepEqual(throttle.takeStats(), { sent: 0, suppressed: 0 });
-    assert.equal(debug.length, 2);
-    assert.match(debug[0], /suppressed k 505W/);
+  it('measures change against the last value pushed, not the last reading', () => {
+    const { policy } = makePolicy();
+    policy.shouldPush('k', 'watts', 500);
+    assert.equal(policy.shouldPush('k', 'watts', 510), false);
+    assert.equal(policy.shouldPush('k', 'watts', 520), false);
+    assert.equal(policy.shouldPush('k', 'watts', 530), true);
+    assert.equal(policy.shouldPush('k', 'watts', 540), false);
+  });
+
+  it('kWh: pushes once the change reaches minChangeKwh', () => {
+    const { policy } = makePolicy();
+    policy.shouldPush('k', 'kwh', 1000);
+    assert.equal(policy.shouldPush('k', 'kwh', 1000.05), false);
+    assert.equal(policy.shouldPush('k', 'kwh', 1000.09), false);
+    assert.equal(policy.shouldPush('k', 'kwh', 1000.1), true);
+  });
+
+  it('kWh: honours a configured minChangeKwh', () => {
+    const { policy } = makePolicy({ minChangeKwh: 0.01 });
+    policy.shouldPush('k', 'kwh', 1000);
+    assert.equal(policy.shouldPush('k', 'kwh', 1000.009), false);
+    assert.equal(policy.shouldPush('k', 'kwh', 1000.01), true);
+  });
+
+  it('pushes an unchanged value once 5 minutes have passed', () => {
+    const { policy, clock: c } = makePolicy();
+    assert.equal(EVE_HEARTBEAT_MS, 5 * 60 * 1000);
+    policy.shouldPush('w', 'watts', 500);
+    policy.shouldPush('e', 'kwh', 1000);
+    c.advance(299);
+    assert.equal(policy.shouldPush('w', 'watts', 501), false);
+    assert.equal(policy.shouldPush('e', 'kwh', 1000), false);
+    c.advance(1);
+    assert.equal(policy.shouldPush('w', 'watts', 501), true);
+    assert.equal(policy.shouldPush('e', 'kwh', 1000), true);
+    // The heartbeat restarts from the push.
+    c.advance(10);
+    assert.equal(policy.shouldPush('w', 'watts', 502), false);
+  });
+
+  it('tracks keys independently', () => {
+    const { policy } = makePolicy();
+    policy.shouldPush('a', 'watts', 500);
+    policy.shouldPush('b', 'watts', 1000);
+    assert.equal(policy.shouldPush('a', 'watts', 530), true);
+    assert.equal(policy.shouldPush('b', 'watts', 1010), false);
+  });
+
+  it('counts and debug-logs suppressed updates', () => {
+    const { policy, stats, debug } = makePolicy();
+    policy.shouldPush('k', 'watts', 500); // sent
+    policy.shouldPush('k', 'watts', 505); // suppressed
+    policy.shouldPush('k', 'watts', 600); // sent
+    assert.equal(stats.eveSent, 2);
+    assert.equal(stats.eveSuppressed, 1);
+    assert.equal(debug.length, 1);
+    assert.match(debug[0], /suppressed: k 505/);
   });
 });
 
-describe('resolveThrottleConfig', () => {
-  it('defaults to enabled with the documented values', () => {
-    assert.deepEqual(resolveThrottleConfig({}), {
-      enabled: true,
+describe('EveUpdatePolicy — pollOnly', () => {
+  it('removes NOTIFY and never pushes, not even the first value', () => {
+    const { policy, stats, debug } = makePolicy({ evePowerUpdates: 'pollOnly' });
+    assert.equal(policy.notify, false);
+    for (const v of [500, 5000, 0]) {
+      assert.equal(policy.shouldPush('k', 'watts', v), false);
+      assert.equal(policy.shouldPush('e', 'kwh', v), false);
+    }
+    assert.equal(stats.eveSent, 0);
+    assert.equal(debug.length, 0);
+  });
+});
+
+describe('EveUpdatePolicy — live', () => {
+  it('keeps NOTIFY and pushes every value', () => {
+    const { policy, stats, debug } = makePolicy({ evePowerUpdates: 'live' });
+    assert.equal(policy.notify, true);
+    for (const v of [500, 500, 501, 0, 0, 1]) {
+      assert.equal(policy.shouldPush('k', 'watts', v), true);
+      assert.equal(policy.shouldPush('e', 'kwh', v), true);
+    }
+    assert.equal(stats.eveSuppressed, 0);
+    assert.equal(debug.length, 0);
+  });
+});
+
+describe('resolveUpdateConfig', () => {
+  it('defaults to throttled with the documented values', () => {
+    assert.deepEqual(resolveUpdateConfig({}), {
+      evePowerUpdates: 'throttled',
       minChangeWatts: 25,
       minChangePercent: 2,
-      maxIntervalSeconds: 300,
+      minChangeKwh: 0.1,
+      switchHoldSeconds: 60,
     });
   });
 
   it('honours user values and ignores invalid ones', () => {
     assert.deepEqual(
-      resolveThrottleConfig({ throttleUpdates: false, minChangeWatts: 10, minChangePercent: -1, maxIntervalSeconds: 'x' }),
-      { enabled: false, minChangeWatts: 10, minChangePercent: 2, maxIntervalSeconds: 300 },
+      resolveUpdateConfig({ evePowerUpdates: 'pollOnly', minChangeWatts: 10, minChangePercent: -1, minChangeKwh: 'x', switchHoldSeconds: 0 }),
+      { evePowerUpdates: 'pollOnly', minChangeWatts: 10, minChangePercent: 2, minChangeKwh: 0.1, switchHoldSeconds: 0 },
     );
+    assert.equal(resolveUpdateConfig({ evePowerUpdates: 'bogus' }).evePowerUpdates, 'throttled');
   });
 });
 
-describe('SolarOnHysteresis', () => {
-  const HOLD_S = 5 * 60;
+describe('PowerSwitch', () => {
+  const HOLD_S = 60;
 
-  function make() {
+  function make(holdS = HOLD_S) {
     const c = clock();
-    return { h: new SolarOnHysteresis(50, 20, HOLD_S * 1000, c.now), clock: c };
+    const stats = new UpdateStats();
+    const debug: string[] = [];
+    const sw = new PowerSwitch('Test', holdS * 1000, stats, msg => debug.push(msg), c.now);
+    return { sw, stats, debug, clock: c };
   }
 
-  it('is off before the first reading', () => {
-    assert.equal(make().h.isOn, false);
+  it('is off before the first reading and reports the first reading immediately', () => {
+    assert.equal(make().sw.isOn, false);
+    assert.equal(make().sw.update(800), true);
+    assert.equal(make().sw.update(30), false);
   });
 
-  it('takes the first reading directly', () => {
-    assert.equal(make().h.update(800), true);
-    assert.equal(make().h.update(30), false);
+  describe('deadband', () => {
+    it('uses the named thresholds', () => {
+      assert.equal(SWITCH_ON_ABOVE_W, 50);
+      assert.equal(SWITCH_OFF_BELOW_W, 20);
+    });
+
+    it('turns on only above 50 W and off only below 20 W', () => {
+      const { sw } = make(0);
+      sw.update(0);
+      assert.equal(sw.update(50), false);
+      assert.equal(sw.update(30), false);
+      assert.equal(sw.update(51), true);
+      assert.equal(sw.update(20), true);
+      assert.equal(sw.update(35), true);
+      assert.equal(sw.update(19.9), false);
+    });
   });
 
-  it('turns on only above 50 W and off only below 20 W', () => {
-    const { h, clock: c } = make();
-    h.update(0);
-    c.advance(HOLD_S);
-    assert.equal(h.update(50), false);
-    assert.equal(h.update(51), true);
-    c.advance(HOLD_S);
-    assert.equal(h.update(20), true);
-    assert.equal(h.update(30), true);
-    assert.equal(h.update(19), false);
-  });
+  describe('hold', () => {
+    it('reports a new state only after it has held for switchHoldSeconds', () => {
+      const { sw, stats, debug, clock: c } = make();
+      sw.update(0);
+      c.advance(10);
+      assert.equal(sw.update(100), false); // pending on
+      c.advance(HOLD_S - 1);
+      assert.equal(sw.update(100), false); // 59 s held
+      c.advance(1);
+      assert.equal(sw.update(100), true); // 60 s held → reported
+      assert.equal(stats.switchReported, 1);
+      assert.ok(debug.some(m => /holding change to on/.test(m)));
+    });
 
-  it('holds each state for at least 5 minutes', () => {
-    const { h, clock: c } = make();
-    h.update(0);
-    c.advance(HOLD_S);
-    assert.equal(h.update(100), true);
-    c.advance(HOLD_S - 1);
-    assert.equal(h.update(0), true); // still held
-    c.advance(1);
-    assert.equal(h.update(0), false);
-    c.advance(60);
-    assert.equal(h.update(100), false); // held off
-    c.advance(HOLD_S);
-    assert.equal(h.update(100), true);
+    it('cancels a pending change if power goes back, and restarts the hold next time', () => {
+      const { sw, stats, debug, clock: c } = make();
+      sw.update(800);
+      c.advance(10);
+      assert.equal(sw.update(5), true); // pending off (cloud)
+      c.advance(30);
+      assert.equal(sw.update(400), true); // sun back: cancelled
+      assert.equal(stats.switchHeld, 1);
+      assert.ok(debug.some(m => /cancelled/.test(m)));
+      c.advance(10);
+      assert.equal(sw.update(5), true); // new pending off
+      c.advance(HOLD_S - 1);
+      assert.equal(sw.update(5), true); // hold restarted, not yet 60 s
+      c.advance(1);
+      assert.equal(sw.update(5), false);
+    });
+
+    it('treats a reading in the deadband as no change (cancels the pending one)', () => {
+      const { sw, clock: c } = make();
+      sw.update(0);
+      c.advance(10);
+      sw.update(100); // pending on
+      c.advance(30);
+      assert.equal(sw.update(35), false); // in deadband while off → stays off, pending cancelled
+      c.advance(HOLD_S);
+      assert.equal(sw.update(100), false); // pending starts over
+    });
+
+    it('reports immediately when switchHoldSeconds is 0', () => {
+      const { sw, clock: c } = make(0);
+      sw.update(0);
+      c.advance(10);
+      assert.equal(sw.update(100), true);
+      c.advance(10);
+      assert.equal(sw.update(0), false);
+    });
+  });
+});
+
+describe('UpdateStats', () => {
+  it('summarises the counts on one line and resets them', () => {
+    const stats = new UpdateStats();
+    stats.eveSent = 3;
+    stats.eveSuppressed = 7;
+    stats.switchReported = 1;
+    stats.switchHeld = 2;
+    const line = stats.takeSummary();
+    assert.match(line, /3 sent, 7 suppressed/);
+    assert.match(line, /1 reported, 2 held back/);
+    assert.ok(!line.includes('\n'));
+    assert.match(stats.takeSummary(), /0 sent, 0 suppressed.*0 reported, 0 held back/);
   });
 });

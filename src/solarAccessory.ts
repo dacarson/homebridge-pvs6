@@ -2,8 +2,8 @@ import { PlatformAccessory, Service } from 'homebridge';
 import { PVS6Platform } from './platform';
 import { PVS6Reading } from './pvs6Client';
 import { EVE_ENERGY_SERVICE_UUID } from './eveCharacteristics';
+import { MeterCharacteristics } from './meterCharacteristics';
 import { MatterEnergyBridge } from './matterEnergy';
-import { SolarOnHysteresis } from './throttle';
 
 export class SolarAccessory {
   private readonly service: Service;
@@ -12,9 +12,7 @@ export class SolarAccessory {
 
   private lastPowerW = 0;
   private lastEnergyKWh = 0;
-
-  // Only used when throttling is enabled: stops On flapping at sunrise/sunset.
-  private readonly onHysteresis: SolarOnHysteresis | null;
+  private readonly meter: MeterCharacteristics;
 
   // Optional: publishes this meter over Matter for the Apple Home Energy
   // view. Null when the "matter" config option is off; also cleared when the
@@ -31,7 +29,6 @@ export class SolarAccessory {
     matterEnabled = false,
   ) {
     const { Characteristic } = platform;
-    const { EveWatts, EveKWh } = platform.eveChars;
 
     const infoService =
       accessory.getService(platform.Service.AccessoryInformation) ??
@@ -48,30 +45,8 @@ export class SolarAccessory {
 
     this.service.setCharacteristic(Characteristic.Name, displayName);
 
-    this.onHysteresis = platform.powerThrottle.enabled ? new SolarOnHysteresis() : null;
-
-    // On = true when solar is producing.
-    // HAP's On is read/write; the setter reverts to the polled state immediately.
-    this.service
-      .getCharacteristic(Characteristic.On)
-      .onGet(() => this.isOn())
-      .onSet(async () => {
-        this.service.updateCharacteristic(Characteristic.On, this.isOn());
-      });
-
-    // OutletInUse is required for Eve Energy to render correctly
-    this.service
-      .getCharacteristic(Characteristic.OutletInUse)
-      .onGet(() => true);
-
-    // Eve custom characteristics — getCharacteristic() is idempotent across restarts
-    this.service
-      .getCharacteristic(EveWatts)
-      .onGet(() => this.lastPowerW);
-
-    this.service
-      .getCharacteristic(EveKWh)
-      .onGet(() => this.lastEnergyKWh);
+    // On (power-derived, with deadband + hold), OutletInUse, Eve Watts, Eve kWh.
+    this.meter = new MeterCharacteristics(platform, accessory, this.service, 'solar', displayName);
 
     // fakegato history — 'energy' type records { time, power } in Watts
     this.historyService = new FakeGatoHistoryService('energy', accessory, { storage: 'fs' });
@@ -94,25 +69,11 @@ export class SolarAccessory {
     }
   }
 
-  private isOn(): boolean {
-    return this.onHysteresis ? this.onHysteresis.isOn : this.lastPowerW > 0;
-  }
-
   updateValues(reading: PVS6Reading): void {
-    const { Characteristic } = this.platform;
-    const { EveWatts, EveKWh } = this.platform.eveChars;
-
     this.lastPowerW = reading.pvPowerW;
     this.lastEnergyKWh = reading.pvEnergyKWh;
 
-    const on = this.onHysteresis ? this.onHysteresis.update(this.lastPowerW) : this.lastPowerW > 0;
-    this.service.updateCharacteristic(Characteristic.On, on);
-    this.service.updateCharacteristic(Characteristic.OutletInUse, true);
-    // Throttled (see throttle.ts); onGet above still returns the newest reading.
-    if (this.platform.powerThrottle.shouldSend('solar.watts', this.lastPowerW)) {
-      this.service.updateCharacteristic(EveWatts, this.lastPowerW);
-    }
-    this.service.updateCharacteristic(EveKWh, this.lastEnergyKWh);
+    this.meter.update(this.lastPowerW, this.lastEnergyKWh);
 
     this.historyService.addEntry({
       time: Math.round(Date.now() / 1000),
