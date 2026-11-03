@@ -44,10 +44,9 @@
  * features from the declared state — declaring `cumulativeEnergyImported`
  * selects the ImportedEnergy + CumulativeEnergy features, `cumulativeEnergyExported`
  * selects ExportedEnergy + CumulativeEnergy, and both together (for a
- * bidirectional meter) select both pairs at once. No voltage/current data is
- * available from the PVS6 varserver reliably enough to publish, so only
- * activePower is declared; voltage/activeCurrent are optional per the
- * Matter spec and are simply omitted.
+ * bidirectional meter) select both pairs at once. The grid meter omits
+ * voltage and current. Solar publishes the production meter's line voltage
+ * and an active current derived from the same power reading (I = P / V).
  *
  * Imported vs. exported energy is always two separate attributes
  * ------------------------------------------------------------
@@ -90,9 +89,22 @@
  * when an idle direction becomes active). Live activePower is unaffected
  * and still updates on every poll; it is a plain attribute with no event.
  *
+ * Solar production on Homebridge 2.5.0+
+ * --------------------------------------
+ * Homebridge 2.5.0 adds Matter's SolarPower device type (spec §14.3). When
+ * this bridge is asked for a solar device and api.versionGreaterOrEqual
+ * ('2.5.0') is true, register() publishes that type instead of a standalone
+ * ElectricalSensor. SolarPower is composed: a wired PowerSource for the
+ * inverter, plus an ElectricalSensor part ('meter') that carries the same
+ * power and exported-energy clusters as before. Its voltage is the production
+ * meter's line-to-line reading (v12V). Its active current is that power
+ * divided by that voltage, with the same sign as activePower. The production
+ * meter's phase currents stay at 0 while it is generating, so they are not
+ * used. Older Homebridge builds, and the grid meter, stay on ElectricalSensor.
+ *
  * Requirements
  * ------------
- * - Homebridge 2.3.0+
+ * - Homebridge 2.3.0+ (2.5.0+ for the SolarPower device type)
  * - Matter enabled on this plugin's child bridge (Homebridge UI ->
  *   plugin settings -> Bridge Settings -> enable Matter)
  *
@@ -109,16 +121,29 @@ export interface EnergyReadings {
     importedEnergyKWh?: number;
     /** Required when direction is 'exported' or 'bidirectional'. */
     exportedEnergyKWh?: number;
+    /**
+     * Line voltage in volts. Solar passes the production meter's v12V.
+     * Null is "no reading"; omit the field for a meter that does not report it.
+     * Active current is then powerW / voltageV.
+     */
+    voltageV?: number | null;
 }
 export declare class MatterEnergyBridge {
     private readonly log;
     private readonly direction;
+    private readonly preferSolarDevice;
     private readonly api;
     private uuid;
     private registered;
     private warnedUpdate;
+    private meterPartId;
     private readonly energyEvents;
-    constructor(api: API, log: Logger, direction: EnergyDirection);
+    constructor(api: API, log: Logger, direction: EnergyDirection, preferSolarDevice?: boolean);
+    /**
+     * Homebridge 2.5.0+ exposes deviceTypes.SolarPower. Older builds keep the
+     * ElectricalSensor meter.
+     */
+    private useSolarDevice;
     private kinds;
     /**
      * Whether this Homebridge build exposes everything needed to publish this
@@ -126,8 +151,11 @@ export declare class MatterEnergyBridge {
      */
     isSupported(): boolean;
     private initialClusters;
+    private solarParts;
     /**
-     * Register this meter as a Matter electrical sensor.
+     * Register this meter as a Matter accessory. Solar production on
+     * Homebridge 2.5.0+ is a SolarPower device; everything else is an
+     * ElectricalSensor.
      *
      * @param seedKey - unique per-meter key used to derive this accessory's
      * Matter UUID, distinct from the HAP accessory's UUID

@@ -35,12 +35,15 @@ class SolarAccessory {
             // Matter's activePower sign convention is positive = drawing power,
             // negative = supplying it, so a generation-only meter like this one
             // must negate its (always non-negative) wattage for Matter.
-            const bridge = new matterEnergy_1.MatterEnergyBridge(platform.api, platform.log, 'exported');
+            // Homebridge 2.5.0+ publishes this as SolarPower; older builds stay
+            // on the ElectricalSensor meter. See MatterEnergyBridge.
+            const bridge = new matterEnergy_1.MatterEnergyBridge(platform.api, platform.log, 'exported', true);
             if (bridge.isSupported()) {
                 this.matter = bridge;
                 bridge.register(`${serialNumber}-solar`, displayName, `${serialNumber}-solar`, {
                     powerW: -this.lastPowerW,
                     exportedEnergyKWh: this.lastEnergyKWh,
+                    voltageV: null,
                 }).catch(() => { });
             }
             else {
@@ -56,7 +59,11 @@ class SolarAccessory {
             time: Math.round(Date.now() / 1000),
             power: this.lastPowerW,
         });
-        this.matter?.update({ powerW: -this.lastPowerW, exportedEnergyKWh: this.lastEnergyKWh }).catch(() => { });
+        this.matter?.update({
+            powerW: -this.lastPowerW,
+            exportedEnergyKWh: this.lastEnergyKWh,
+            voltageV: reading.pvLineVoltageV,
+        }).catch(() => { });
         this.platform.log.debug(`Solar: ${this.lastPowerW}W  ${this.lastEnergyKWh}kWh`);
     }
 }

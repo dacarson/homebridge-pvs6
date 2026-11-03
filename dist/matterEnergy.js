@@ -45,10 +45,9 @@
  * features from the declared state — declaring `cumulativeEnergyImported`
  * selects the ImportedEnergy + CumulativeEnergy features, `cumulativeEnergyExported`
  * selects ExportedEnergy + CumulativeEnergy, and both together (for a
- * bidirectional meter) select both pairs at once. No voltage/current data is
- * available from the PVS6 varserver reliably enough to publish, so only
- * activePower is declared; voltage/activeCurrent are optional per the
- * Matter spec and are simply omitted.
+ * bidirectional meter) select both pairs at once. The grid meter omits
+ * voltage and current. Solar publishes the production meter's line voltage
+ * and an active current derived from the same power reading (I = P / V).
  *
  * Imported vs. exported energy is always two separate attributes
  * ------------------------------------------------------------
@@ -91,9 +90,22 @@
  * when an idle direction becomes active). Live activePower is unaffected
  * and still updates on every poll; it is a plain attribute with no event.
  *
+ * Solar production on Homebridge 2.5.0+
+ * --------------------------------------
+ * Homebridge 2.5.0 adds Matter's SolarPower device type (spec §14.3). When
+ * this bridge is asked for a solar device and api.versionGreaterOrEqual
+ * ('2.5.0') is true, register() publishes that type instead of a standalone
+ * ElectricalSensor. SolarPower is composed: a wired PowerSource for the
+ * inverter, plus an ElectricalSensor part ('meter') that carries the same
+ * power and exported-energy clusters as before. Its voltage is the production
+ * meter's line-to-line reading (v12V). Its active current is that power
+ * divided by that voltage, with the same sign as activePower. The production
+ * meter's phase currents stay at 0 while it is generating, so they are not
+ * used. Older Homebridge builds, and the grid meter, stay on ElectricalSensor.
+ *
  * Requirements
  * ------------
- * - Homebridge 2.3.0+
+ * - Homebridge 2.3.0+ (2.5.0+ for the SolarPower device type)
  * - Matter enabled on this plugin's child bridge (Homebridge UI ->
  *   plugin settings -> Bridge Settings -> enable Matter)
  *
@@ -111,15 +123,58 @@ function wToMilliW(value) {
     const n = Number(value);
     return Number.isFinite(n) ? Math.round(n * 1000) : 0;
 }
+// Voltage is millivolts. Active current is milliamps, I = P / V, and it
+// carries activePower's sign. A missing or non-positive voltage is "no reading".
+function powerMeasurement(r) {
+    const activePower = wToMilliW(r.powerW);
+    if (r.voltageV === undefined) {
+        return { activePower };
+    }
+    const voltageV = r.voltageV;
+    if (voltageV === null || !Number.isFinite(voltageV) || voltageV <= 0) {
+        return { activePower, voltage: null, activeCurrent: null };
+    }
+    const voltage = Math.round(voltageV * 1000);
+    if (voltage <= 0) {
+        return { activePower, voltage: null, activeCurrent: null };
+    }
+    return {
+        activePower,
+        voltage,
+        activeCurrent: Math.round(activePower / voltage * 1000),
+    };
+}
 class MatterEnergyBridge {
-    constructor(api, log, direction) {
+    constructor(api, log, direction, 
+    // Solar production asks for Matter's SolarPower device when Homebridge
+    // is new enough to have it. Anything else stays an ElectricalSensor.
+    preferSolarDevice = false) {
         this.log = log;
         this.direction = direction;
+        this.preferSolarDevice = preferSolarDevice;
         this.uuid = null;
         this.registered = false;
         this.warnedUpdate = false;
         this.api = api;
         this.energyEvents = new energyEvents_1.EnergyEventScheduler(this.kinds());
+    }
+    /**
+     * Homebridge 2.5.0+ exposes deviceTypes.SolarPower. Older builds keep the
+     * ElectricalSensor meter.
+     */
+    useSolarDevice() {
+        if (!this.preferSolarDevice)
+            return false;
+        if (this.api.versionGreaterOrEqual?.('2.5.0') !== true) {
+            this.log.debug('[matter] Homebridge is older than 2.5.0 — publishing solar as an ElectricalSensor.');
+            return false;
+        }
+        const types = this.api.matter?.deviceTypes;
+        if (!types?.SolarPower || !types.PowerSource) {
+            this.log.debug('[matter] SolarPower device type unavailable — publishing solar as an ElectricalSensor.');
+            return false;
+        }
+        return true;
     }
     kinds() {
         return this.direction === 'bidirectional' ? ['imported', 'exported'] : [this.direction];
@@ -160,12 +215,40 @@ class MatterEnergyBridge {
             }
         }
         return {
-            electricalPowerMeasurement: { activePower: wToMilliW(r.powerW) },
+            electricalPowerMeasurement: powerMeasurement(r),
             electricalEnergyMeasurement: energyField,
         };
     }
+    // SolarPower (spec §14.3) is the parent. Its parts are a wired inverter
+    // and the generation meter. The meter part carries line voltage and the
+    // current derived from it.
+    solarParts(readings) {
+        const matter = this.api.matter;
+        const clusters = this.initialClusters(readings);
+        return [
+            {
+                id: 'inverter',
+                displayName: 'Inverter',
+                deviceType: matter.deviceTypes.PowerSource,
+                clusters: {
+                    powerSource: { status: 1, order: 0, description: 'Inverter', wiredCurrentType: 0 },
+                },
+            },
+            {
+                id: 'meter',
+                displayName: 'Generation',
+                deviceType: matter.deviceTypes.ElectricalSensor,
+                clusters: {
+                    electricalPowerMeasurement: clusters.electricalPowerMeasurement,
+                    electricalEnergyMeasurement: clusters.electricalEnergyMeasurement,
+                },
+            },
+        ];
+    }
     /**
-     * Register this meter as a Matter electrical sensor.
+     * Register this meter as a Matter accessory. Solar production on
+     * Homebridge 2.5.0+ is a SolarPower device; everything else is an
+     * ElectricalSensor.
      *
      * @param seedKey - unique per-meter key used to derive this accessory's
      * Matter UUID, distinct from the HAP accessory's UUID
@@ -178,19 +261,24 @@ class MatterEnergyBridge {
             return false;
         const matter = this.api.matter;
         this.uuid = matter.uuid.generate(`${PLUGIN_NAME}:matter:${seedKey}`);
+        const solar = this.useSolarDevice();
         const accessory = {
             UUID: this.uuid,
             displayName,
-            deviceType: matter.deviceTypes.ElectricalSensor,
+            deviceType: solar ? matter.deviceTypes.SolarPower : matter.deviceTypes.ElectricalSensor,
             serialNumber,
             manufacturer: 'SunStrong',
             model: 'PVS6',
-            clusters: this.initialClusters(readings),
+            ...(solar
+                ? { parts: this.solarParts(readings) }
+                : { clusters: this.initialClusters(readings) }),
         };
         try {
             await matter.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
             this.registered = true;
-            this.log.info(`[matter] Published "${displayName}" as a Matter electrical sensor — live power should feed the Apple Home Energy view.`);
+            this.meterPartId = solar ? 'meter' : undefined;
+            const kind = solar ? 'solar power device' : 'electrical sensor';
+            this.log.info(`[matter] Published "${displayName}" as a Matter ${kind} — live power should feed the Apple Home Energy view.`);
             return true;
         }
         catch (err) {
@@ -209,8 +297,9 @@ class MatterEnergyBridge {
         const matter = this.api.matter;
         if (!matter)
             return;
+        const partId = this.meterPartId;
         const updates = [
-            matter.updateAccessoryState(this.uuid, 'electricalPowerMeasurement', { activePower: wToMilliW(readings.powerW) }),
+            matter.updateAccessoryState(this.uuid, 'electricalPowerMeasurement', powerMeasurement(readings), partId),
         ];
         // Only the energy fields that are due — each one sent emits a Matter event.
         const energy = this.energyEvents.next({
@@ -218,7 +307,7 @@ class MatterEnergyBridge {
             exported: readings.exportedEnergyKWh,
         });
         if (energy) {
-            updates.push(matter.updateAccessoryState(this.uuid, 'electricalEnergyMeasurement', energy));
+            updates.push(matter.updateAccessoryState(this.uuid, 'electricalEnergyMeasurement', energy, partId));
         }
         try {
             await Promise.all(updates);

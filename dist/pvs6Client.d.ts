@@ -2,6 +2,7 @@ import { Logger } from 'homebridge';
 export interface PVS6Reading {
     pvPowerW: number;
     pvEnergyKWh: number;
+    pvLineVoltageV: number | null;
     netPowerW: number;
     gridImportKWh: number;
     gridExportKWh: number;
@@ -20,6 +21,7 @@ export declare class PVS6Client {
     private livedataCacheId;
     private mdataCacheId;
     private consumptionMeterIdx;
+    private productionMeterIdx;
     private lastRequestTime;
     private lastReading;
     private static readonly MIN_INTERVAL_MS;

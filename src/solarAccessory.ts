@@ -56,12 +56,15 @@ export class SolarAccessory {
       // Matter's activePower sign convention is positive = drawing power,
       // negative = supplying it, so a generation-only meter like this one
       // must negate its (always non-negative) wattage for Matter.
-      const bridge = new MatterEnergyBridge(platform.api, platform.log, 'exported');
+      // Homebridge 2.5.0+ publishes this as SolarPower; older builds stay
+      // on the ElectricalSensor meter. See MatterEnergyBridge.
+      const bridge = new MatterEnergyBridge(platform.api, platform.log, 'exported', true);
       if (bridge.isSupported()) {
         this.matter = bridge;
         bridge.register(`${serialNumber}-solar`, displayName, `${serialNumber}-solar`, {
           powerW: -this.lastPowerW,
           exportedEnergyKWh: this.lastEnergyKWh,
+          voltageV: null,
         }).catch(() => {});
       } else {
         platform.log.info('[matter] Config option "matter" is enabled, but the Matter API is unavailable. It needs a Homebridge build with the ElectricalSensor device type, with Matter enabled on this plugin\'s child bridge. Continuing with HomeKit/Eve only.');
@@ -80,7 +83,11 @@ export class SolarAccessory {
       power: this.lastPowerW,
     });
 
-    this.matter?.update({ powerW: -this.lastPowerW, exportedEnergyKWh: this.lastEnergyKWh }).catch(() => {});
+    this.matter?.update({
+      powerW: -this.lastPowerW,
+      exportedEnergyKWh: this.lastEnergyKWh,
+      voltageV: reading.pvLineVoltageV,
+    }).catch(() => {});
 
     this.platform.log.debug(`Solar: ${this.lastPowerW}W  ${this.lastEnergyKWh}kWh`);
   }

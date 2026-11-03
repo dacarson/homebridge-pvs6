@@ -5,6 +5,7 @@ import { Logger } from 'homebridge';
 export interface PVS6Reading {
   pvPowerW: number;             // solar production in W (from livedata pv_p * 1000)
   pvEnergyKWh: number;         // solar cumulative kWh (from livedata pv_en)
+  pvLineVoltageV: number | null; // production-meter line voltage, v12V; null if that meter has not reported one
   netPowerW: number;           // net grid W, positive = importing, negative = exporting (net_p * 1000)
   gridImportKWh: number;       // lifetime imported kWh (from consumption meter posLtea3phsumKwh)
   gridExportKWh: number;       // lifetime exported kWh (from consumption meter negLtea3phsumKwh)
@@ -30,12 +31,14 @@ export class PVS6Client {
   private livedataCacheId: string | null = null;
   private mdataCacheId: string | null = null;
   private consumptionMeterIdx: string | null = null;
+  private productionMeterIdx: string | null = null;
   private lastRequestTime = 0;
 
   // Retained across polls — partial responses use last known good values (spec §ErrorHandling)
   private lastReading: PVS6Reading = {
     pvPowerW: 0,
     pvEnergyKWh: 0,
+    pvLineVoltageV: null,
     netPowerW: 0,
     gridImportKWh: 0,
     gridExportKWh: 0,
@@ -154,12 +157,13 @@ export class PVS6Client {
   }
 
   private parseReading(livedata: VarDict, mdata: VarDict): PVS6Reading {
-    if (this.consumptionMeterIdx === null) {
+    if (this.consumptionMeterIdx === null || this.productionMeterIdx === null) {
       this.discoverMeters(mdata);
     }
 
     const last = this.lastReading;
     const consIdx = this.consumptionMeterIdx;
+    const prodIdx = this.productionMeterIdx;
 
     const pvPowerKW = this.num(livedata['/sys/livedata/pv_p'], 'pv_p');
     const pvEnergyKWh = this.num(livedata['/sys/livedata/pv_en'], 'pv_en');
@@ -171,6 +175,9 @@ export class PVS6Client {
     const gridExportKWhRaw = consIdx !== null
       ? this.num(mdata[`/sys/devices/meter/${consIdx}/negLtea3phsumKwh`], 'cons.negLtea3phsumKwh')
       : null;
+    const pvLineVoltageV = prodIdx !== null
+      ? this.num(mdata[`/sys/devices/meter/${prodIdx}/v12V`], 'prod.v12V')
+      : null;
 
     const resolvedPvEnergyKWh = pvEnergyKWh ?? last.pvEnergyKWh;
     const resolvedGridImportKWh = gridImportKWhRaw ?? last.gridImportKWh;
@@ -179,6 +186,7 @@ export class PVS6Client {
     const reading: PVS6Reading = {
       pvPowerW: pvPowerKW !== null ? Math.round(pvPowerKW * 1000 * 10) / 10 : last.pvPowerW,
       pvEnergyKWh: resolvedPvEnergyKWh,
+      pvLineVoltageV: pvLineVoltageV ?? last.pvLineVoltageV,
       netPowerW: netPowerKW !== null ? Math.round(netPowerKW * 1000 * 10) / 10 : last.netPowerW,
       gridImportKWh: resolvedGridImportKWh,
       gridExportKWh: resolvedGridExportKWh,
@@ -201,14 +209,21 @@ export class PVS6Client {
 
     for (const idx of indices) {
       const model = String(mdata[`/sys/devices/meter/${idx}/prodMdlNm`] ?? '');
-      if (model.toLowerCase().endsWith('c')) {
+      const modelName = model.toLowerCase();
+      if (modelName.endsWith('c')) {
         this.consumptionMeterIdx = idx;
         this.log.debug(`Consumption meter at index ${idx}: ${model}`);
+      } else if (modelName.endsWith('p')) {
+        this.productionMeterIdx = idx;
+        this.log.debug(`Production meter at index ${idx}: ${model}`);
       }
     }
 
     if (this.consumptionMeterIdx === null) {
       this.log.warn('No consumption meter found in PVS6 response (model ending in "c")');
+    }
+    if (this.productionMeterIdx === null) {
+      this.log.warn('No production meter found in PVS6 response (model ending in "p")');
     }
   }
 

@@ -52,11 +52,13 @@ class PVS6Client {
         this.livedataCacheId = null;
         this.mdataCacheId = null;
         this.consumptionMeterIdx = null;
+        this.productionMeterIdx = null;
         this.lastRequestTime = 0;
         // Retained across polls — partial responses use last known good values (spec §ErrorHandling)
         this.lastReading = {
             pvPowerW: 0,
             pvEnergyKWh: 0,
+            pvLineVoltageV: null,
             netPowerW: 0,
             gridImportKWh: 0,
             gridExportKWh: 0,
@@ -156,11 +158,12 @@ class PVS6Client {
         return data;
     }
     parseReading(livedata, mdata) {
-        if (this.consumptionMeterIdx === null) {
+        if (this.consumptionMeterIdx === null || this.productionMeterIdx === null) {
             this.discoverMeters(mdata);
         }
         const last = this.lastReading;
         const consIdx = this.consumptionMeterIdx;
+        const prodIdx = this.productionMeterIdx;
         const pvPowerKW = this.num(livedata['/sys/livedata/pv_p'], 'pv_p');
         const pvEnergyKWh = this.num(livedata['/sys/livedata/pv_en'], 'pv_en');
         const netPowerKW = this.num(livedata['/sys/livedata/net_p'], 'net_p');
@@ -171,12 +174,16 @@ class PVS6Client {
         const gridExportKWhRaw = consIdx !== null
             ? this.num(mdata[`/sys/devices/meter/${consIdx}/negLtea3phsumKwh`], 'cons.negLtea3phsumKwh')
             : null;
+        const pvLineVoltageV = prodIdx !== null
+            ? this.num(mdata[`/sys/devices/meter/${prodIdx}/v12V`], 'prod.v12V')
+            : null;
         const resolvedPvEnergyKWh = pvEnergyKWh ?? last.pvEnergyKWh;
         const resolvedGridImportKWh = gridImportKWhRaw ?? last.gridImportKWh;
         const resolvedGridExportKWh = gridExportKWhRaw ?? last.gridExportKWh;
         const reading = {
             pvPowerW: pvPowerKW !== null ? Math.round(pvPowerKW * 1000 * 10) / 10 : last.pvPowerW,
             pvEnergyKWh: resolvedPvEnergyKWh,
+            pvLineVoltageV: pvLineVoltageV ?? last.pvLineVoltageV,
             netPowerW: netPowerKW !== null ? Math.round(netPowerKW * 1000 * 10) / 10 : last.netPowerW,
             gridImportKWh: resolvedGridImportKWh,
             gridExportKWh: resolvedGridExportKWh,
@@ -196,13 +203,21 @@ class PVS6Client {
         }
         for (const idx of indices) {
             const model = String(mdata[`/sys/devices/meter/${idx}/prodMdlNm`] ?? '');
-            if (model.toLowerCase().endsWith('c')) {
+            const modelName = model.toLowerCase();
+            if (modelName.endsWith('c')) {
                 this.consumptionMeterIdx = idx;
                 this.log.debug(`Consumption meter at index ${idx}: ${model}`);
+            }
+            else if (modelName.endsWith('p')) {
+                this.productionMeterIdx = idx;
+                this.log.debug(`Production meter at index ${idx}: ${model}`);
             }
         }
         if (this.consumptionMeterIdx === null) {
             this.log.warn('No consumption meter found in PVS6 response (model ending in "c")');
+        }
+        if (this.productionMeterIdx === null) {
+            this.log.warn('No production meter found in PVS6 response (model ending in "p")');
         }
     }
     num(raw, field) {
