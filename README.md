@@ -136,10 +136,11 @@ Uncheck **Auto Discover** and supply the host and serial number directly. This s
       "serialNumber": "ZT231385000549A1234",
       "pollInterval": 10,
       "matter": true,
-      "throttleUpdates": true,
+      "evePowerUpdates": "throttled",
       "minChangeWatts": 25,
       "minChangePercent": 2,
-      "maxIntervalSeconds": 300,
+      "minChangeKwh": 0.1,
+      "switchHoldSeconds": 60,
       "accessories": {
         "grid": true,
         "homeConsumption": true
@@ -163,10 +164,11 @@ Uncheck **Auto Discover** and supply the host and serial number directly. This s
 | `serialNumber` | string | no* | — | Full PVS6 serial number. The last 5 characters are used as the API password. Used only when `autoDiscover` is `false` |
 | `pollInterval` | integer | no | `10` | Seconds between polls. Minimum enforced: `5` |
 | `matter` | boolean | no | `false` | Also publish each enabled meter over Matter with live electrical measurements, so it shows watts on its tile in the Apple Home Energy view (see [Apple Home Energy & Matter](#apple-home-energy--matter)) |
-| `throttleUpdates` | boolean | no | `true` | Only send Eve Watts updates when the power changes meaningfully, and add hysteresis to the Solar Production On switch. See [Update Throttling](#update-throttling). Set `false` to send every poll |
-| `minChangeWatts` | number | no | `25` | Throttling: minimum change in watts before an update is sent |
-| `minChangePercent` | number | no | `2` | Throttling: minimum change as a percentage of the last value sent. The larger of this and `minChangeWatts` applies |
-| `maxIntervalSeconds` | number | no | `300` | Throttling: send the current value anyway once this many seconds have passed since the last update |
+| `evePowerUpdates` | string | no | `"throttled"` | How Eve Watts and Eve kWh are sent to HomeKit: `"throttled"`, `"pollOnly"` or `"live"`. See [HomeKit Updates & Automations](#homekit-updates--automations) |
+| `minChangeWatts` | number | no | `25` | Throttled mode: push Eve Watts once it has changed by this many watts, or by `minChangePercent` if that is larger |
+| `minChangePercent` | number | no | `2` | Throttled mode: push Eve Watts once it has changed by this percentage of the last value pushed |
+| `minChangeKwh` | number | no | `0.1` | Throttled mode: push Eve kWh once it has changed by this much |
+| `switchHoldSeconds` | integer | no | `60` | A power-derived On switch only changes once the new state has held this long. `0` disables the hold |
 | `accessories.grid` | boolean | no | `true` | Enable the Grid Import + Grid Export accessory pair. Set `false` to disable both |
 | `accessories.homeConsumption` | boolean | no | `false` | Enable the Home Consumption accessory. Opt-in; off by default |
 | `solarName` | string | no | `"Solar Production"` | HomeKit display name for the Solar Production accessory |
@@ -176,21 +178,34 @@ Uncheck **Auto Discover** and supply the host and serial number directly. This s
 
 \* Required when `autoDiscover` is `false`.
 
-### Update Throttling
+### HomeKit Updates & Automations
 
-The PVS6 is polled every ~10 seconds, and each reading differs from the last by a few watts. Without throttling, every poll sends a HomeKit event for each Eve Watts value (Solar Production, Home Consumption, Grid Import and Grid Export). That adds up to about 1,000 events per hour.
+The PVS6 is polled every ~10 seconds, and each reading differs from the last by a few watts. If every reading were pushed to HomeKit, each accessory's Eve Watts and Eve kWh values would send an event on every poll, adding up to about 1,000 events per hour. The settings below reduce that without breaking your automations.
 
-With `throttleUpdates` on (the default), an Eve Watts update is sent only when one of these is true:
+#### Eve power and energy values (`evePowerUpdates`)
 
-- the value has changed by at least `max(minChangeWatts, minChangePercent% of the last value sent)` since the last update sent. With the defaults that is 25 W below 1,250 W and 2% above it
-- the value crosses to or from 0, for example when export stops
-- `maxIntervalSeconds` has passed since the last update for that accessory
+Eve Watts and Eve kWh are Eve custom characteristics. The Home app doesn't show them, but **Eve and Home+ automations can trigger on them** ("when power rises above 3 kW") **or check them as conditions**. Choose a mode with that in mind:
 
-Throttling only affects the events pushed to HomeKit. When an app reads an accessory, it always gets the latest reading. Eve kWh, fakegato history and Matter live power are not throttled (Matter energy has its own fixed schedule; see [Apple Home Energy & Matter](#apple-home-energy--matter)), and the first value after startup is always sent.
+| Mode | What is pushed | Effect on automations |
+|---|---|---|
+| `throttled` (default) | Eve Watts when it changes by at least `max(minChangeWatts, minChangePercent%)` (defaults 25 W / 2%, so 25 W below 1,250 W and 2% above). Eve kWh when it changes by at least `minChangeKwh` (default 0.1 kWh). Either value is also pushed every 5 minutes, even if it hasn't changed much | Triggers and conditions keep working. Values are accurate to within the configured thresholds |
+| `pollOnly` | Nothing. Event notifications are removed from these characteristics, and apps get the newest reading when they read the accessory | Lowest traffic, but **triggers on these values stop firing**. Use it only if no automation uses them |
+| `live` | Every reading, on every poll | Original behaviour; highest traffic |
 
-Throttling also adds hysteresis to the Solar Production **On** switch so it doesn't flicker on and off at sunrise and sunset. It turns on above 50 W and off below 20 W, and each state is held for at least 5 minutes.
+In every mode, reading an accessory returns the latest value, and the current values are reported as soon as the plugin starts.
 
-At debug level, each suppressed update is logged, and once an hour a single line reports how many updates were sent and how many were suppressed. Setting `throttleUpdates` to `false` restores the previous behaviour, where every poll is sent.
+#### On switches
+
+Each accessory's **On** switch is a standard HomeKit characteristic. It always sends events, so Home app automations that use it keep working. To keep the switches from flickering at sunrise, at sunset, or when a cloud passes, each one is derived from power with:
+
+- **a deadband:** it turns on above 50 W and off below 20 W
+- **a hold:** a new state must last `switchHoldSeconds` (default 60) before it's reported. If power goes back first, the change is dropped. Set it to `0` to report changes on the next poll
+
+Because of the hold, **automations triggered by these switches can fire up to `switchHoldSeconds` later** than the underlying change in power.
+
+#### Logging
+
+At debug level, each suppressed Eve update and each held or cancelled switch change is logged. Once an hour a single debug line reports how many updates were sent and how many were suppressed.
 
 ### Finding Your Serial Number
 
@@ -204,7 +219,7 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 
 | Characteristic | Source | Notes |
 |---|---|---|
-| On | `pv_p > 0` | True when panels are actively generating. With throttling on: turns on above 50 W, off below 20 W, each state held ≥ 5 min |
+| On | `pv_p` | True when panels are generating: on above 50 W, off below 20 W, after the state has held for `switchHoldSeconds` |
 | OutletInUse | Always `true` | Required by Eve Energy |
 | Eve Watts | `pv_p × 1000` | Real-time solar output in Watts |
 | Eve kWh | `pv_en` | Lifetime generation in kWh |
@@ -213,7 +228,7 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 
 | Characteristic | Source | Notes |
 |---|---|---|
-| On | `net_p > 0` | True when importing from grid |
+| On | `max(0, net_p)` | True when importing from the grid: on above 50 W, off below 20 W, after the state has held for `switchHoldSeconds` |
 | OutletInUse | Always `true` | Required by Eve Energy |
 | Eve Watts | `max(0, net_p) × 1000` | Import watts; zero when net-exporting |
 | Eve kWh | `posLtea3phsumKwh` | Lifetime imported energy from consumption CT meter |
@@ -222,7 +237,7 @@ The serial number is printed on the label on the PVS6 unit (format: `ZT...`). It
 
 | Characteristic | Source | Notes |
 |---|---|---|
-| On | `net_p < 0` | True when net-exporting solar to the grid |
+| On | `max(0, −net_p)` | True when net-exporting to the grid: on above 50 W, off below 20 W, after the state has held for `switchHoldSeconds` |
 | OutletInUse | Always `true` | Required by Eve Energy |
 | Eve Watts | `max(0, −net_p) × 1000` | Export watts; zero when importing |
 | Eve kWh | `negLtea3phsumKwh` | Lifetime exported energy from consumption CT meter |
@@ -233,7 +248,7 @@ Shows the total real-time load of the home and a derived lifetime consumption fi
 
 | Characteristic | Source | Notes |
 |---|---|---|
-| On | `site_load_p > 0` | True when the house is drawing power (always true in practice) |
+| On | `site_load_p` | True when the house is drawing power (on above 50 W, off below 20 W, after the state has held for `switchHoldSeconds`; always on in practice) |
 | OutletInUse | Always `true` | Required by Eve Energy |
 | Eve Watts | `site_load_p × 1000` | Real-time site load in Watts |
 | Eve kWh | `pv_en + posLtea3phsumKwh − negLtea3phsumKwh` | Derived lifetime consumption — all solar generated, plus grid imported, minus grid exported |
@@ -270,7 +285,7 @@ Power is sent in milliwatts, energy in milliwatt-hours, per the Matter spec. Mat
 
 **Cumulative and periodic energy:** each meter reports both the lifetime total (`cumulativeEnergyImported`/`Exported`) and a periodic delta (`periodicEnergyImported`/`Exported`) with its own start/end timestamps. The periodic figure is what drives Apple Home's per-device energy attribution in the Energy view, not the cumulative total alone.
 
-**Energy reporting rate:** every energy update records a Matter event, so the plugin doesn't send one on every poll. The lifetime total is sent when it changes, and at least every 15 minutes even if it hasn't. Periodic energy is added up across polls and sent as one 15-minute period. A period is sent early when a direction that was idle starts recording energy, such as at sunrise or when the grid switches from exporting to importing, so new activity shows up right away. Live power (`activePower`) still updates on every poll. This behaviour is always on and isn't affected by `throttleUpdates`.
+**Energy reporting rate:** every energy update records a Matter event, so the plugin doesn't send one on every poll. The lifetime total is sent when it changes, and at least every 15 minutes even if it hasn't. Periodic energy is added up across polls and sent as one 15-minute period. A period is sent early when a direction that was idle starts recording energy, such as at sunrise or when the grid switches from exporting to importing, so new activity shows up right away. Live power (`activePower`) still updates on every poll. This behaviour is always on and isn't affected by `evePowerUpdates`.
 
 Requirements:
 

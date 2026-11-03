@@ -12,15 +12,17 @@ const matterEnergy_1 = require("./matterEnergy");
 const pvs6Discovery_1 = require("./pvs6Discovery");
 const pvs6DiscoveryCache_1 = require("./pvs6DiscoveryCache");
 const throttle_1 = require("./throttle");
+const meterCharacteristics_1 = require("./meterCharacteristics");
 const MIN_POLL_INTERVAL = 5;
 const AUTH_RETRY_MS = 30000;
 const AUTH_BACKOFF_MS = 60000;
 const OVERLOAD_BACKOFF_MS = 15000;
 const REDISCOVERY_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
 const NETWORK_ERROR_LOG_INTERVAL_MS = 5 * 60 * 1000; // suppress repeat network error logs within 5 min
-const THROTTLE_STATS_INTERVAL_MS = 60 * 60 * 1000; // hourly sent/suppressed summary
+const UPDATE_STATS_INTERVAL_MS = 60 * 60 * 1000; // hourly sent/suppressed summary
 class PVS6Platform {
     constructor(log, config, api) {
+        this.updateStats = new throttle_1.UpdateStats();
         this.accessories = [];
         // Optional: publishes the grid meter over Matter as a single bidirectional
         // accessory (signed activePower, both imported/exported energy on one
@@ -50,17 +52,18 @@ class PVS6Platform {
             pollInterval = MIN_POLL_INTERVAL;
         }
         this.pollIntervalMs = pollInterval * 1000;
-        const throttleConfig = (0, throttle_1.resolveThrottleConfig)(pvs6Config);
-        this.powerThrottle = new throttle_1.PowerThrottle(throttleConfig, msg => this.log.debug(msg));
-        if (throttleConfig.enabled) {
-            this.log.info(`Power update throttling on: min change ${throttleConfig.minChangeWatts}W / ${throttleConfig.minChangePercent}%, ` +
-                `heartbeat ${throttleConfig.maxIntervalSeconds}s`);
-            this.throttleStatsTimer = setInterval(() => {
-                const { sent, suppressed } = this.powerThrottle.takeStats();
-                this.log.debug(`Power updates in the last hour: ${sent} sent, ${suppressed} suppressed`);
-            }, THROTTLE_STATS_INTERVAL_MS);
-            this.throttleStatsTimer.unref?.();
-        }
+        this.updateConfig = (0, throttle_1.resolveUpdateConfig)(pvs6Config);
+        const uc = this.updateConfig;
+        this.evePolicy = new throttle_1.EveUpdatePolicy(uc, this.updateStats, msg => this.log.debug(msg));
+        this.log.info(`Eve power updates: ${uc.evePowerUpdates}` +
+            (uc.evePowerUpdates === 'throttled'
+                ? ` (min change ${uc.minChangeWatts}W / ${uc.minChangePercent}%, ${uc.minChangeKwh}kWh)`
+                : '') +
+            `; switch hold ${uc.switchHoldSeconds}s`);
+        this.updateStatsTimer = setInterval(() => {
+            this.log.debug(this.updateStats.takeSummary());
+        }, UPDATE_STATS_INTERVAL_MS);
+        this.updateStatsTimer.unref?.();
         this.log.info('Finished initializing platform:', config.name ?? settings_1.PLATFORM_NAME);
         this.api.on('didFinishLaunching', () => {
             this.log.debug('didFinishLaunching — resolving config, setting up accessories');
@@ -80,14 +83,17 @@ class PVS6Platform {
             if (this.pollTimer) {
                 clearInterval(this.pollTimer);
             }
-            if (this.throttleStatsTimer) {
-                clearInterval(this.throttleStatsTimer);
+            if (this.updateStatsTimer) {
+                clearInterval(this.updateStatsTimer);
             }
         });
     }
     // Called by Homebridge for each accessory it has cached from a previous run.
     configureAccessory(accessory) {
         this.log.info('Loading accessory from cache:', accessory.displayName);
+        // Set Eve NOTIFY perms before the bridge is published, so a change of
+        // evePowerUpdates mode is reflected in the accessory database HomeKit sees.
+        (0, meterCharacteristics_1.applyEvePerms)(accessory, this.evePolicy.notify);
         this.accessories.push(accessory);
     }
     // Determines host + serialNumber from config or mDNS discovery.
@@ -169,6 +175,10 @@ class PVS6Platform {
             const homeUuid = this.api.hap.uuid.generate(`${serialNumber}-home`);
             this.homeConsumptionAccessory = new homeConsumptionAccessory_1.HomeConsumptionAccessory(this, this.getOrCreateAccessory(homeUuid, homeName), FakeGatoHistoryService, homeName, serialNumber);
         }
+    }
+    // Power-derived On switch with the configured hold, shared stats and logging.
+    createPowerSwitch(name) {
+        return new throttle_1.PowerSwitch(name, this.updateConfig.switchHoldSeconds * 1000, this.updateStats, msg => this.log.debug(msg));
     }
     getOrCreateAccessory(uuid, displayName) {
         const existing = this.accessories.find(a => a.UUID === uuid);
@@ -259,73 +269,76 @@ class PVS6Platform {
         });
     }
     startPolling() {
-        this.pollTimer = setInterval(async () => {
-            this.checkRediscovery();
-            if (this.pollInFlight) {
-                this.log.debug('Poll skipped — previous request still in flight');
-                return;
+        // Poll once right away so HomeKit has correct values at startup, then on the interval.
+        void this.pollOnce();
+        this.pollTimer = setInterval(() => void this.pollOnce(), this.pollIntervalMs);
+    }
+    async pollOnce() {
+        this.checkRediscovery();
+        if (this.pollInFlight) {
+            this.log.debug('Poll skipped — previous request still in flight');
+            return;
+        }
+        if (this.backedOff) {
+            this.log.debug('Poll skipped — in backoff period');
+            return;
+        }
+        this.pollInFlight = true;
+        try {
+            const reading = await this.client.poll();
+            this.lastSuccessfulPollTime = Date.now();
+            this.consecutiveNetworkErrors = 0;
+            this.solarAccessory?.updateValues(reading);
+            this.gridImportAccessory?.updateValues(reading);
+            this.gridExportAccessory?.updateValues(reading);
+            this.homeConsumptionAccessory?.updateValues(reading);
+            this.gridMatterBridge?.update({
+                powerW: reading.netPowerW,
+                importedEnergyKWh: reading.gridImportKWh,
+                exportedEnergyKWh: reading.gridExportKWh,
+            }).catch(() => { });
+        }
+        catch (err) {
+            if (err instanceof pvs6Client_1.HttpError) {
+                if (err.statusCode === 401) {
+                    this.log.warn('HTTP 401 — session expired, re-authenticating...');
+                    this.consecutiveNetworkErrors = 0;
+                    this.triggerReauth();
+                }
+                else if (err.statusCode >= 500) {
+                    this.log.warn(`HTTP ${err.statusCode} from PVS6 — device may be overloaded. Backing off ${OVERLOAD_BACKOFF_MS / 1000}s`);
+                    this.consecutiveNetworkErrors = 0;
+                    this.enterBackoff(OVERLOAD_BACKOFF_MS);
+                }
+                else {
+                    this.log.warn(`Poll HTTP error: ${err.message}`);
+                }
             }
-            if (this.backedOff) {
-                this.log.debug('Poll skipped — in backoff period');
-                return;
-            }
-            this.pollInFlight = true;
-            try {
-                const reading = await this.client.poll();
-                this.lastSuccessfulPollTime = Date.now();
-                this.consecutiveNetworkErrors = 0;
-                this.solarAccessory?.updateValues(reading);
-                this.gridImportAccessory?.updateValues(reading);
-                this.gridExportAccessory?.updateValues(reading);
-                this.homeConsumptionAccessory?.updateValues(reading);
-                this.gridMatterBridge?.update({
-                    powerW: reading.netPowerW,
-                    importedEnergyKWh: reading.gridImportKWh,
-                    exportedEnergyKWh: reading.gridExportKWh,
-                }).catch(() => { });
-            }
-            catch (err) {
-                if (err instanceof pvs6Client_1.HttpError) {
-                    if (err.statusCode === 401) {
-                        this.log.warn('HTTP 401 — session expired, re-authenticating...');
+            else if (err instanceof Error) {
+                if (err.message.includes('timeout') || err.message.includes('socket hang up') || err.message.includes('ECONNRESET')) {
+                    this.consecutiveNetworkErrors++;
+                    const now = Date.now();
+                    if (now - this.lastNetworkErrorLogTime > NETWORK_ERROR_LOG_INTERVAL_MS) {
+                        this.log.warn(`Poll network error: ${err.message}`);
+                        this.lastNetworkErrorLogTime = now;
+                    }
+                    if (this.consecutiveNetworkErrors >= 3) {
+                        this.log.warn(`${this.consecutiveNetworkErrors} consecutive network errors — re-authenticating...`);
                         this.consecutiveNetworkErrors = 0;
                         this.triggerReauth();
                     }
-                    else if (err.statusCode >= 500) {
-                        this.log.warn(`HTTP ${err.statusCode} from PVS6 — device may be overloaded. Backing off ${OVERLOAD_BACKOFF_MS / 1000}s`);
-                        this.consecutiveNetworkErrors = 0;
-                        this.enterBackoff(OVERLOAD_BACKOFF_MS);
-                    }
-                    else {
-                        this.log.warn(`Poll HTTP error: ${err.message}`);
-                    }
                 }
-                else if (err instanceof Error) {
-                    if (err.message.includes('timeout') || err.message.includes('socket hang up') || err.message.includes('ECONNRESET')) {
-                        this.consecutiveNetworkErrors++;
-                        const now = Date.now();
-                        if (now - this.lastNetworkErrorLogTime > NETWORK_ERROR_LOG_INTERVAL_MS) {
-                            this.log.warn(`Poll network error: ${err.message}`);
-                            this.lastNetworkErrorLogTime = now;
-                        }
-                        if (this.consecutiveNetworkErrors >= 3) {
-                            this.log.warn(`${this.consecutiveNetworkErrors} consecutive network errors — re-authenticating...`);
-                            this.consecutiveNetworkErrors = 0;
-                            this.triggerReauth();
-                        }
-                    }
-                    else if (err.message.includes('JSON parse')) {
-                        this.log.warn(`${err.message}`);
-                    }
-                    else {
-                        this.log.warn(`Poll error: ${err.message}`);
-                    }
+                else if (err.message.includes('JSON parse')) {
+                    this.log.warn(`${err.message}`);
+                }
+                else {
+                    this.log.warn(`Poll error: ${err.message}`);
                 }
             }
-            finally {
-                this.pollInFlight = false;
-            }
-        }, this.pollIntervalMs);
+        }
+        finally {
+            this.pollInFlight = false;
+        }
     }
     triggerReauth() {
         this.enterBackoff(AUTH_BACKOFF_MS);

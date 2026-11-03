@@ -1,40 +1,51 @@
-export interface ThrottleConfig {
-    enabled: boolean;
+export type EvePowerUpdatesMode = 'throttled' | 'pollOnly' | 'live';
+export declare const EVE_HEARTBEAT_MS: number;
+export declare const SWITCH_ON_ABOVE_W = 50;
+export declare const SWITCH_OFF_BELOW_W = 20;
+export interface UpdateConfig {
+    evePowerUpdates: EvePowerUpdatesMode;
     minChangeWatts: number;
     minChangePercent: number;
-    maxIntervalSeconds: number;
+    minChangeKwh: number;
+    switchHoldSeconds: number;
 }
-export declare const DEFAULT_THROTTLE_CONFIG: ThrottleConfig;
-export declare function resolveThrottleConfig(raw: {
-    throttleUpdates?: unknown;
+export declare const DEFAULT_UPDATE_CONFIG: UpdateConfig;
+export declare function resolveUpdateConfig(raw: {
+    evePowerUpdates?: unknown;
     minChangeWatts?: unknown;
     minChangePercent?: unknown;
-    maxIntervalSeconds?: unknown;
-}): ThrottleConfig;
+    minChangeKwh?: unknown;
+    switchHoldSeconds?: unknown;
+}): UpdateConfig;
 type DebugLog = (message: string) => void;
-export declare class PowerThrottle {
-    readonly config: ThrottleConfig;
+export declare class UpdateStats {
+    eveSent: number;
+    eveSuppressed: number;
+    switchReported: number;
+    switchHeld: number;
+    takeSummary(): string;
+}
+export type EveValueKind = 'watts' | 'kwh';
+export declare class EveUpdatePolicy {
+    readonly config: UpdateConfig;
+    private readonly stats;
     private readonly debug;
     private readonly now;
-    private readonly lastSent;
-    private sentCount;
-    private suppressedCount;
-    constructor(config: ThrottleConfig, debug?: DebugLog, now?: () => number);
-    get enabled(): boolean;
-    shouldSend(key: string, value: number): boolean;
-    takeStats(): {
-        sent: number;
-        suppressed: number;
-    };
+    private readonly lastPushed;
+    constructor(config: UpdateConfig, stats?: UpdateStats, debug?: DebugLog, now?: () => number);
+    get mode(): EvePowerUpdatesMode;
+    get notify(): boolean;
+    shouldPush(key: string, kind: EveValueKind, value: number): boolean;
 }
-export declare class SolarOnHysteresis {
-    private readonly onAboveW;
-    private readonly offBelowW;
-    private readonly minHoldMs;
+export declare class PowerSwitch {
+    private readonly name;
+    private readonly holdMs;
+    private readonly stats;
+    private readonly debug;
     private readonly now;
-    private state;
-    private lastChange;
-    constructor(onAboveW?: number, offBelowW?: number, minHoldMs?: number, now?: () => number);
+    private reported;
+    private pending;
+    constructor(name: string, holdMs: number, stats?: UpdateStats, debug?: DebugLog, now?: () => number);
     get isOn(): boolean;
     update(powerW: number): boolean;
 }

@@ -1,117 +1,163 @@
 "use strict";
-// Event throttling for power readings.
+// HomeKit traffic reduction.
 //
 // The PVS6 is polled every ~10 s and every reading differs by a few watts, so
-// pushing each one to HomeKit generates ~1,000 events/hour across the Eve Watts
-// characteristics. PowerThrottle decides whether a new Eve Watts value is
-// worth sending; SolarOnHysteresis keeps the Solar "On" switch from flapping
-// at sunrise/sunset. Both are pure (no HAP dependency) so they can be unit-tested.
+// pushing each one to HomeKit generates ~1,000 events/hour. Two independent
+// mechanisms cut that down without breaking automations:
+//
+// - EveUpdatePolicy decides whether a new Eve Watts / Eve kWh value is pushed,
+//   per the evePowerUpdates setting:
+//     throttled — push on a meaningful change or every EVE_HEARTBEAT_MS
+//     pollOnly  — never push (NOTIFY is removed); values are served on read
+//     live      — push every poll (original behaviour)
+// - PowerSwitch derives the standard HomeKit On switches from power, with a
+//   deadband (on above SWITCH_ON_ABOVE_W, off below SWITCH_OFF_BELOW_W) and a
+//   hold: a new state must persist for switchHoldSeconds before it's reported.
+//
+// Both are pure (no HAP dependency, injectable clock) so they can be unit-tested.
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SolarOnHysteresis = exports.PowerThrottle = exports.DEFAULT_THROTTLE_CONFIG = void 0;
-exports.resolveThrottleConfig = resolveThrottleConfig;
-exports.DEFAULT_THROTTLE_CONFIG = {
-    enabled: true,
+exports.PowerSwitch = exports.EveUpdatePolicy = exports.UpdateStats = exports.DEFAULT_UPDATE_CONFIG = exports.SWITCH_OFF_BELOW_W = exports.SWITCH_ON_ABOVE_W = exports.EVE_HEARTBEAT_MS = void 0;
+exports.resolveUpdateConfig = resolveUpdateConfig;
+exports.EVE_HEARTBEAT_MS = 5 * 60 * 1000;
+exports.SWITCH_ON_ABOVE_W = 50;
+exports.SWITCH_OFF_BELOW_W = 20;
+exports.DEFAULT_UPDATE_CONFIG = {
+    evePowerUpdates: 'throttled',
     minChangeWatts: 25,
     minChangePercent: 2,
-    maxIntervalSeconds: 300,
+    minChangeKwh: 0.1,
+    switchHoldSeconds: 60,
 };
-// Builds a ThrottleConfig from raw user config, falling back to defaults for
-// missing, non-numeric or negative values.
-function resolveThrottleConfig(raw) {
+const MODES = ['throttled', 'pollOnly', 'live'];
+// Builds an UpdateConfig from raw user config, falling back to defaults for
+// missing, unknown, non-numeric or negative values.
+function resolveUpdateConfig(raw) {
     const num = (v, fallback) => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : fallback;
-    const d = exports.DEFAULT_THROTTLE_CONFIG;
+    const d = exports.DEFAULT_UPDATE_CONFIG;
     return {
-        enabled: raw.throttleUpdates !== false,
+        evePowerUpdates: MODES.includes(raw.evePowerUpdates)
+            ? raw.evePowerUpdates
+            : d.evePowerUpdates,
         minChangeWatts: num(raw.minChangeWatts, d.minChangeWatts),
         minChangePercent: num(raw.minChangePercent, d.minChangePercent),
-        maxIntervalSeconds: num(raw.maxIntervalSeconds, d.maxIntervalSeconds),
+        minChangeKwh: num(raw.minChangeKwh, d.minChangeKwh),
+        switchHoldSeconds: num(raw.switchHoldSeconds, d.switchHoldSeconds),
     };
 }
-class PowerThrottle {
-    constructor(config, debug = () => { }, now = Date.now) {
+// Counts for the hourly summary, shared by the Eve policy and all switches.
+class UpdateStats {
+    constructor() {
+        this.eveSent = 0;
+        this.eveSuppressed = 0;
+        this.switchReported = 0;
+        // A pending switch change that was cancelled because power went back
+        // before switchHoldSeconds elapsed (i.e. a flap that was never reported).
+        this.switchHeld = 0;
+    }
+    // Returns a one-line summary of the counts and resets them.
+    takeSummary() {
+        const line = `HomeKit updates in the last hour: Eve values ${this.eveSent} sent, ${this.eveSuppressed} suppressed; ` +
+            `switch changes ${this.switchReported} reported, ${this.switchHeld} held back`;
+        this.eveSent = this.eveSuppressed = this.switchReported = this.switchHeld = 0;
+        return line;
+    }
+}
+exports.UpdateStats = UpdateStats;
+class EveUpdatePolicy {
+    constructor(config, stats = new UpdateStats(), debug = () => { }, now = Date.now) {
         this.config = config;
+        this.stats = stats;
         this.debug = debug;
         this.now = now;
-        this.lastSent = new Map();
-        this.sentCount = 0;
-        this.suppressedCount = 0;
+        this.lastPushed = new Map();
     }
-    get enabled() {
-        return this.config.enabled;
+    get mode() {
+        return this.config.evePowerUpdates;
+    }
+    // Whether the Eve characteristics should advertise NOTIFY.
+    get notify() {
+        return this.mode !== 'pollOnly';
     }
     // Returns true if `value` should be pushed to HomeKit for `key`
-    // (accessory + characteristic), and records it as sent if so.
-    // Always true when throttling is disabled or for the first value of a key.
-    shouldSend(key, value) {
-        if (!this.config.enabled) {
+    // (accessory + characteristic), and records it as pushed if so.
+    shouldPush(key, kind, value) {
+        if (this.mode === 'pollOnly') {
+            return false;
+        }
+        if (this.mode === 'live') {
+            this.stats.eveSent++;
             return true;
         }
         const now = this.now();
-        const prev = this.lastSent.get(key);
-        let send = prev === undefined;
+        const prev = this.lastPushed.get(key);
         if (prev !== undefined) {
-            const delta = Math.abs(value - prev.value);
-            const threshold = Math.max(this.config.minChangeWatts, (this.config.minChangePercent / 100) * Math.abs(prev.value));
-            const zeroCrossing = (prev.value === 0) !== (value === 0);
-            const heartbeatDue = now - prev.time >= this.config.maxIntervalSeconds * 1000;
-            send = delta >= threshold || zeroCrossing || heartbeatDue;
-            if (!send) {
-                this.suppressedCount++;
-                this.debug(`Throttle: suppressed ${key} ${value}W ` +
-                    `(last sent ${prev.value}W ${Math.round((now - prev.time) / 1000)}s ago, threshold ${threshold.toFixed(1)}W)`);
+            const threshold = kind === 'watts'
+                ? Math.max(this.config.minChangeWatts, (this.config.minChangePercent / 100) * Math.abs(prev.value))
+                : this.config.minChangeKwh;
+            // Small tolerance so float subtraction (1000.01 - 1000 = 0.00999…) still meets the threshold.
+            const changedEnough = Math.abs(value - prev.value) + 1e-9 >= threshold;
+            const heartbeatDue = now - prev.time >= exports.EVE_HEARTBEAT_MS;
+            if (!changedEnough && !heartbeatDue) {
+                this.stats.eveSuppressed++;
+                this.debug(`Eve update suppressed: ${key} ${value} (last pushed ${prev.value} ` +
+                    `${Math.round((now - prev.time) / 1000)}s ago, threshold ${threshold})`);
                 return false;
             }
         }
-        this.lastSent.set(key, { value, time: now });
-        this.sentCount++;
+        // First value (startup) is always pushed.
+        this.lastPushed.set(key, { value, time: now });
+        this.stats.eveSent++;
         return true;
     }
-    // Returns the counts since the last call and resets them.
-    takeStats() {
-        const stats = { sent: this.sentCount, suppressed: this.suppressedCount };
-        this.sentCount = 0;
-        this.suppressedCount = 0;
-        return stats;
-    }
 }
-exports.PowerThrottle = PowerThrottle;
-// Hysteresis for the Solar Production "On" switch: turns on above onAboveW,
-// off below offBelowW, and holds each state for at least minHoldMs.
-class SolarOnHysteresis {
-    constructor(onAboveW = 50, offBelowW = 20, minHoldMs = 5 * 60 * 1000, now = Date.now) {
-        this.onAboveW = onAboveW;
-        this.offBelowW = offBelowW;
-        this.minHoldMs = minHoldMs;
+exports.EveUpdatePolicy = EveUpdatePolicy;
+// A HomeKit On switch derived from a power reading.
+class PowerSwitch {
+    constructor(name, holdMs, stats = new UpdateStats(), debug = () => { }, now = Date.now) {
+        this.name = name;
+        this.holdMs = holdMs;
+        this.stats = stats;
+        this.debug = debug;
         this.now = now;
-        this.lastChange = 0;
+        this.pending = null;
     }
-    // Current state; false before the first reading.
+    // Reported state; false before the first reading.
     get isOn() {
-        return this.state ?? false;
+        return this.reported ?? false;
     }
-    // Feeds a new power reading and returns the (possibly unchanged) state.
+    // Feeds a new power reading and returns the (possibly unchanged) reported state.
     update(powerW) {
         const now = this.now();
-        if (this.state === undefined) {
-            // First reading (startup): no previous state, so take it from the on
-            // threshold directly. The minimum hold starts from here.
-            this.state = powerW > this.onAboveW;
-            this.lastChange = now;
-            return this.state;
+        if (this.reported === undefined) {
+            // Startup: report the current state immediately, no hold.
+            this.reported = powerW > exports.SWITCH_ON_ABOVE_W;
+            return this.reported;
         }
-        if (now - this.lastChange < this.minHoldMs) {
-            return this.state;
+        // Deadband: what the state should be, judged against the reported state.
+        const target = this.reported ? !(powerW < exports.SWITCH_OFF_BELOW_W) : powerW > exports.SWITCH_ON_ABOVE_W;
+        if (target === this.reported) {
+            if (this.pending) {
+                this.stats.switchHeld++;
+                this.debug(`${this.name} switch: change to ${this.pending.state ? 'on' : 'off'} cancelled after ` +
+                    `${Math.round((now - this.pending.since) / 1000)}s (power ${powerW}W)`);
+                this.pending = null;
+            }
+            return this.reported;
         }
-        if (!this.state && powerW > this.onAboveW) {
-            this.state = true;
-            this.lastChange = now;
+        if (!this.pending) {
+            this.pending = { state: target, since: now };
         }
-        else if (this.state && powerW < this.offBelowW) {
-            this.state = false;
-            this.lastChange = now;
+        const heldMs = now - this.pending.since;
+        if (heldMs >= this.holdMs) {
+            this.reported = target;
+            this.pending = null;
+            this.stats.switchReported++;
+            return this.reported;
         }
-        return this.state;
+        this.debug(`${this.name} switch: holding change to ${target ? 'on' : 'off'} ` +
+            `(${Math.round(heldMs / 1000)}s of ${Math.round(this.holdMs / 1000)}s, power ${powerW}W)`);
+        return this.reported;
     }
 }
-exports.SolarOnHysteresis = SolarOnHysteresis;
+exports.PowerSwitch = PowerSwitch;
 //# sourceMappingURL=throttle.js.map
