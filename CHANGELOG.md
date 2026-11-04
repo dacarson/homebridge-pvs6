@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.5.0 — unreleased
+## 1.5.0 — 2026-11-04
 
-Reduces HomeKit and Matter traffic. The plugin used to send about 1,000 HomeKit events an hour, and this release cuts that while keeping automations working.
+Reduces HomeKit traffic. The plugin used to send about 1,000 HomeKit events an hour, and this release cuts that while keeping automations working.
 
 ### Changed defaults
 
@@ -19,9 +19,3 @@ Without any config changes, upgrading from 1.4.0 changes this behaviour:
 - The first poll now runs as soon as the plugin authenticates, so HomeKit has correct values at startup without waiting a full poll interval.
 - Debug logging of suppressed and held updates, plus an hourly debug summary of sent vs. suppressed updates.
 - Unit tests (`npm test`).
-
-### Fixed
-
-- **Matter:** energy events are no longer recorded on every poll. Lifetime totals are sent when they change or every 15 minutes, and periodic energy is reported in 15-minute periods. A period is sent early when an idle direction becomes active.
-- **Matter:** the same periodic-energy interval is no longer reported several times.
-- **Matter:** the first periodic-energy interval after startup no longer reports the meter's entire lifetime total.
