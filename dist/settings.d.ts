@@ -7,6 +7,11 @@ export interface PVS6Config extends PlatformConfig {
     serialNumber?: string;
     pollInterval?: number;
     matter?: boolean;
+    evePowerUpdates?: 'throttled' | 'pollOnly' | 'live';
+    minChangeWatts?: number;
+    minChangePercent?: number;
+    minChangeKwh?: number;
+    switchHoldSeconds?: number;
     accessories?: {
         grid?: boolean;
         homeConsumption?: boolean;

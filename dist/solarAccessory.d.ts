@@ -7,6 +7,7 @@ export declare class SolarAccessory {
     private readonly historyService;
     private lastPowerW;
     private lastEnergyKWh;
+    private readonly meter;
     private matter;
     constructor(platform: PVS6Platform, accessory: PlatformAccessory, FakeGatoHistoryService: any, displayName: string, serialNumber: string, matterEnabled?: boolean);
     updateValues(reading: PVS6Reading): void;

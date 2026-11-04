@@ -41,6 +41,69 @@
         "default": false,
         "description": "Also publish Solar and Grid (import/export combined) over Matter as electrical sensors with live power and cumulative/periodic energy, feeding your Apple Home Energy view. Home Consumption is not published over Matter, since its energy is derived from Solar + Grid rather than an independent measurement. Requires Homebridge 2.3.0+ with Matter enabled on this plugin's child bridge; skipped safely otherwise."
       },
+      "evePowerUpdates": {
+        "title": "Eve power/energy updates",
+        "type": "string",
+        "default": "throttled",
+        "oneOf": [
+          {
+            "title": "Throttled \u2014 push on meaningful change or every 5 minutes (recommended)",
+            "enum": [
+              "throttled"
+            ]
+          },
+          {
+            "title": "Poll only \u2014 never push; lowest traffic, breaks Eve/Home+ triggers on these values",
+            "enum": [
+              "pollOnly"
+            ]
+          },
+          {
+            "title": "Live \u2014 push every poll (original behaviour)",
+            "enum": [
+              "live"
+            ]
+          }
+        ],
+        "description": "How Eve Watts and Eve kWh values are sent to HomeKit. Eve and Home+ automations can trigger on or check these values. Throttled keeps those automations working with values accurate to within the thresholds below. Poll only gives the lowest traffic, but automations triggered by these values stop firing; use it only if no automation uses them."
+      },
+      "minChangeWatts": {
+        "title": "Minimum power change (W)",
+        "type": "number",
+        "default": 25,
+        "minimum": 0,
+        "description": "Throttled: push Eve Watts when it has changed by at least this many watts, or by the percentage below if that is larger.",
+        "condition": {
+          "functionBody": "return !model.evePowerUpdates || model.evePowerUpdates === 'throttled';"
+        }
+      },
+      "minChangePercent": {
+        "title": "Minimum power change (%)",
+        "type": "number",
+        "default": 2,
+        "minimum": 0,
+        "description": "Throttled: push Eve Watts when it has changed by at least this percentage of the last value pushed, or by the watts above if that is larger.",
+        "condition": {
+          "functionBody": "return !model.evePowerUpdates || model.evePowerUpdates === 'throttled';"
+        }
+      },
+      "minChangeKwh": {
+        "title": "Minimum energy change (kWh)",
+        "type": "number",
+        "default": 0.1,
+        "minimum": 0,
+        "description": "Throttled: push Eve kWh when it has changed by at least this much.",
+        "condition": {
+          "functionBody": "return !model.evePowerUpdates || model.evePowerUpdates === 'throttled';"
+        }
+      },
+      "switchHoldSeconds": {
+        "title": "Switch hold (seconds)",
+        "type": "integer",
+        "default": 60,
+        "minimum": 0,
+        "description": "The On switches derived from power (on above 50 W, off below 20 W) only change once the new state has held for this long. Automations triggered by these switches can fire up to this much later than the underlying change. 0 disables the hold."
+      },
       "accessories": {
         "title": "Accessories",
         "type": "object",
@@ -84,5 +147,32 @@
       }
     },
     "required": []
-  }
+  },
+  "layout": [
+    "name",
+    "autoDiscover",
+    "host",
+    "serialNumber",
+    "pollInterval",
+    "matter",
+    {
+      "type": "fieldset",
+      "title": "HomeKit Updates",
+      "expandable": true,
+      "expanded": false,
+      "description": "Control how often power readings are sent to HomeKit.",
+      "items": [
+        "evePowerUpdates",
+        "minChangeWatts",
+        "minChangePercent",
+        "minChangeKwh",
+        "switchHoldSeconds"
+      ]
+    },
+    "accessories",
+    "solarName",
+    "gridName",
+    "gridExportName",
+    "homeConsumptionName"
+  ]
 }

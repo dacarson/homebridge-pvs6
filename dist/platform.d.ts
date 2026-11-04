@@ -1,11 +1,15 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 import { EveChars } from './eveCharacteristics';
+import { EveUpdatePolicy, PowerSwitch } from './throttle';
 export declare class PVS6Platform implements DynamicPlatformPlugin {
     readonly Service: typeof Service;
     readonly Characteristic: typeof Characteristic;
     readonly api: API;
     readonly eveChars: EveChars;
     readonly log: Logger;
+    readonly evePolicy: EveUpdatePolicy;
+    private readonly updateConfig;
+    private readonly updateStats;
     readonly accessories: PlatformAccessory[];
     private client;
     private readonly config;
@@ -16,6 +20,7 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private homeConsumptionAccessory?;
     private gridMatterBridge;
     private pollTimer?;
+    private updateStatsTimer?;
     private pollInFlight;
     private backedOff;
     private consecutiveNetworkErrors;
@@ -28,6 +33,7 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private resolveConfig;
     private discoverWithCache;
     private setupAccessories;
+    createPowerSwitch(name: string): PowerSwitch;
     private getOrCreateAccessory;
     private get discoveryEnabled();
     private checkRediscovery;
@@ -35,6 +41,7 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private stopPolling;
     private startAuthAndPolling;
     private startPolling;
+    private pollOnce;
     private triggerReauth;
     private enterBackoff;
 }
