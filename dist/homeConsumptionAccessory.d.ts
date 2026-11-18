@@ -4,7 +4,7 @@ import { PVS6Reading } from './pvs6Client';
 export declare class HomeConsumptionAccessory {
     private readonly platform;
     private readonly service;
-    private readonly historyService;
+    private readonly history;
     private lastPowerW;
     private lastEnergyKWh;
     private readonly meter;

@@ -1,6 +1,7 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 import { EveChars } from './eveCharacteristics';
 import { EveUpdatePolicy, PowerSwitch } from './throttle';
+import { EveHistoryRecorder } from './eveHistory';
 export declare class PVS6Platform implements DynamicPlatformPlugin {
     readonly Service: typeof Service;
     readonly Characteristic: typeof Characteristic;
@@ -19,6 +20,8 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private gridExportAccessory?;
     private homeConsumptionAccessory?;
     private gridMatterBridge;
+    private readonly historyRecorders;
+    private historyTimer?;
     private pollTimer?;
     private updateStatsTimer?;
     private pollInFlight;
@@ -33,6 +36,7 @@ export declare class PVS6Platform implements DynamicPlatformPlugin {
     private resolveConfig;
     private discoverWithCache;
     private setupAccessories;
+    createEveHistory(FakeGatoHistoryService: any, accessory: PlatformAccessory, name: string): EveHistoryRecorder;
     createPowerSwitch(name: string): PowerSwitch;
     private getOrCreateAccessory;
     private get discoveryEnabled();

@@ -3,11 +3,11 @@ import { PVS6Platform } from './platform';
 import { PVS6Reading } from './pvs6Client';
 import { EVE_ENERGY_SERVICE_UUID } from './eveCharacteristics';
 import { MeterCharacteristics } from './meterCharacteristics';
+import { EveHistoryRecorder } from './eveHistory';
 
 export class HomeConsumptionAccessory {
   private readonly service: Service;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly historyService: any;
+  private readonly history: EveHistoryRecorder;
 
   private lastPowerW = 0;
   private lastEnergyKWh = 0;
@@ -41,7 +41,7 @@ export class HomeConsumptionAccessory {
     // On (power-derived, with deadband + hold), OutletInUse, Eve Watts, Eve kWh.
     this.meter = new MeterCharacteristics(platform, accessory, this.service, 'home', displayName);
 
-    this.historyService = new FakeGatoHistoryService('energy', accessory, { storage: 'fs' });
+    this.history = platform.createEveHistory(FakeGatoHistoryService, accessory, displayName);
   }
 
   updateValues(reading: PVS6Reading): void {
@@ -50,10 +50,7 @@ export class HomeConsumptionAccessory {
 
     this.meter.update(this.lastPowerW, this.lastEnergyKWh);
 
-    this.historyService.addEntry({
-      time: Math.round(Date.now() / 1000),
-      power: this.lastPowerW,
-    });
+    this.history.sample(this.lastPowerW);
 
     this.platform.log.debug(`Home Consumption: ${this.lastPowerW}W  ${this.lastEnergyKWh.toFixed(3)}kWh`);
   }

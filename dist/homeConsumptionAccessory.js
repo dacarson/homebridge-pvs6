@@ -23,16 +23,13 @@ class HomeConsumptionAccessory {
         this.service.setCharacteristic(Characteristic.Name, displayName);
         // On (power-derived, with deadband + hold), OutletInUse, Eve Watts, Eve kWh.
         this.meter = new meterCharacteristics_1.MeterCharacteristics(platform, accessory, this.service, 'home', displayName);
-        this.historyService = new FakeGatoHistoryService('energy', accessory, { storage: 'fs' });
+        this.history = platform.createEveHistory(FakeGatoHistoryService, accessory, displayName);
     }
     updateValues(reading) {
         this.lastPowerW = reading.siteLoadPowerW;
         this.lastEnergyKWh = reading.homeConsumptionKWh;
         this.meter.update(this.lastPowerW, this.lastEnergyKWh);
-        this.historyService.addEntry({
-            time: Math.round(Date.now() / 1000),
-            power: this.lastPowerW,
-        });
+        this.history.sample(this.lastPowerW);
         this.platform.log.debug(`Home Consumption: ${this.lastPowerW}W  ${this.lastEnergyKWh.toFixed(3)}kWh`);
     }
 }

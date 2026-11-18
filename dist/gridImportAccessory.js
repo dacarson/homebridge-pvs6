@@ -23,17 +23,14 @@ class GridImportAccessory {
         this.service.setCharacteristic(Characteristic.Name, displayName);
         // On (power-derived, with deadband + hold), OutletInUse, Eve Watts, Eve kWh.
         this.meter = new meterCharacteristics_1.MeterCharacteristics(platform, accessory, this.service, 'grid-import', displayName);
-        this.historyService = new FakeGatoHistoryService('energy', accessory, { storage: 'fs' });
+        this.history = platform.createEveHistory(FakeGatoHistoryService, accessory, displayName);
     }
     updateValues(reading) {
         // Non-negative: zero when net-exporting, positive when importing.
         this.lastPowerW = Math.max(0, reading.netPowerW);
         this.lastEnergyKWh = reading.gridImportKWh;
         this.meter.update(this.lastPowerW, this.lastEnergyKWh);
-        this.historyService.addEntry({
-            time: Math.round(Date.now() / 1000),
-            power: this.lastPowerW,
-        });
+        this.history.sample(this.lastPowerW);
         this.platform.log.debug(`Grid Import: ${this.lastPowerW}W  ${this.lastEnergyKWh}kWh`);
     }
 }

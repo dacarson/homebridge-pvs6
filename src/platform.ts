@@ -20,6 +20,7 @@ import { discoverPVS6, PVS6DiscoveryResult } from './pvs6Discovery';
 import { loadDiscoveryCache, saveDiscoveryCache } from './pvs6DiscoveryCache';
 import { EveUpdatePolicy, PowerSwitch, resolveUpdateConfig, UpdateConfig, UpdateStats } from './throttle';
 import { applyEvePerms } from './meterCharacteristics';
+import { EVE_HISTORY_INTERVAL_MS, EveHistoryRecorder, historyMaxGapMs } from './eveHistory';
 
 const MIN_POLL_INTERVAL = 5;
 const AUTH_RETRY_MS = 30_000;
@@ -58,6 +59,11 @@ export class PVS6Platform implements DynamicPlatformPlugin {
   // accessories in Eve/HomeKit only, since that split is purely for Eve's
   // characteristic limitation, not a Matter one.
   private gridMatterBridge: MatterEnergyBridge | null = null;
+
+  // Eve history: every accessory samples on each poll; this timer writes one
+  // averaged entry per accessory every 10 minutes. See eveHistory.ts.
+  private readonly historyRecorders: EveHistoryRecorder[] = [];
+  private historyTimer?: ReturnType<typeof setInterval>;
 
   private pollTimer?: ReturnType<typeof setInterval>;
   private updateStatsTimer?: ReturnType<typeof setInterval>;
@@ -132,6 +138,9 @@ export class PVS6Platform implements DynamicPlatformPlugin {
       }
       if (this.updateStatsTimer) {
         clearInterval(this.updateStatsTimer);
+      }
+      if (this.historyTimer) {
+        clearInterval(this.historyTimer);
       }
     });
   }
@@ -260,6 +269,28 @@ export class PVS6Platform implements DynamicPlatformPlugin {
         serialNumber,
       );
     }
+
+    this.historyTimer = setInterval(() => {
+      const now = Date.now();
+      for (const recorder of this.historyRecorders) {
+        recorder.record(now);
+      }
+    }, EVE_HISTORY_INTERVAL_MS);
+    this.historyTimer.unref?.();
+  }
+
+  // fakegato 'energy' history for one accessory. fakegato's own timer is
+  // disabled: it averages samples by count, not time, and doesn't cap power.
+  createEveHistory(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    FakeGatoHistoryService: any,
+    accessory: PlatformAccessory,
+    name: string,
+  ): EveHistoryRecorder {
+    const service = new FakeGatoHistoryService('energy', accessory, { storage: 'fs', disableTimer: true });
+    const recorder = new EveHistoryRecorder(service, name, this.log, historyMaxGapMs(this.pollIntervalMs));
+    this.historyRecorders.push(recorder);
+    return recorder;
   }
 
   // Power-derived On switch with the configured hold, shared stats and logging.
