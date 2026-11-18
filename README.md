@@ -25,7 +25,7 @@ A [Homebridge](https://homebridge.io) plugin for the [SunStrong PVS6](https://su
 - **Grid Import + Grid Export** accessory pair — optional (default enabled); each shows non-negative watts and its own Eve app history
 - **Home Consumption** accessory — optional (default disabled); real-time site load (W) and derived lifetime consumption (kWh)
 - Import and Export accessories are always registered together as a pair, making import/export history immediately readable as separate graphs
-- Up to 7 days of native power history in the Eve app via [fakegato-history](https://github.com/simont77/fakegato-history)
+- About 28 days of native power history in the Eve app via [fakegato-history](https://github.com/simont77/fakegato-history), one 10-minute average per entry (see [Eve History](#eve-history))
 - Polls the PVS6 **local** FCGI API — no SunStrong Connect, no cloud dependency
 - **Auto-discovers** the PVS6 on your local network via mDNS — no IP address or serial number required in config
 - Automatically identifies production and consumption CT meters from the PVS6 device list
@@ -254,6 +254,29 @@ Shows the total real-time load of the home and a derived lifetime consumption fi
 | Eve kWh | `pv_en + posLtea3phsumKwh − negLtea3phsumKwh` | Derived lifetime consumption — all solar generated, plus grid imported, minus grid exported |
 
 The derived kWh formula is exact without a battery: solar energy either goes to the home or the grid, so `pv_en − negLtea3phsumKwh` is the on-site solar consumed and `posLtea3phsumKwh` is the grid energy consumed. All three values already come from the existing livedata and meter caches — no additional API calls are required.
+
+---
+
+## Eve History
+
+Each accessory writes one Eve history entry every 10 minutes, holding the average power over those 10 minutes (weighted by time, so polls don't need to be evenly spaced). fakegato keeps 4032 entries, which is about 28 days.
+
+**Eve history is capped at 6.5 kW.** Eve stores each entry's power in a 16-bit field of tenths of a watt, so the largest value it can hold is 6553.5 W. Above that, the plugin stores 6553.5 W and logs this once per accessory. A 10-minute window that averages above the cap is under-counted in the Eve graph and in Eve's history kWh. For example:
+
+| 10-minute average | Eve history shortfall |
+|---|---|
+| 7.7 kW | about 15% |
+| 9.6 kW | about 32% |
+| 11.5 kW | about 43% |
+
+Most likely on Solar Production with a large array at midday, and on Home Consumption or Grid Import while an EV charges or a heat pump runs.
+
+These are **not** capped, so use them for accurate totals:
+
+- The live **Eve Watts** and **Eve kWh** values on each accessory. Eve kWh comes straight from the PVS6 lifetime meters.
+- The Apple Home **Energy** view, if Matter is enabled (see below).
+
+If you're upgrading from 1.5.0 or earlier, see the CHANGELOG for clearing old history in Eve.
 
 ---
 

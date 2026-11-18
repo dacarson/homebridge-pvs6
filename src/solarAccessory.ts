@@ -3,12 +3,12 @@ import { PVS6Platform } from './platform';
 import { PVS6Reading } from './pvs6Client';
 import { EVE_ENERGY_SERVICE_UUID } from './eveCharacteristics';
 import { MeterCharacteristics } from './meterCharacteristics';
+import { EveHistoryRecorder } from './eveHistory';
 import { MatterEnergyBridge } from './matterEnergy';
 
 export class SolarAccessory {
   private readonly service: Service;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly historyService: any;
+  private readonly history: EveHistoryRecorder;
 
   private lastPowerW = 0;
   private lastEnergyKWh = 0;
@@ -48,8 +48,8 @@ export class SolarAccessory {
     // On (power-derived, with deadband + hold), OutletInUse, Eve Watts, Eve kWh.
     this.meter = new MeterCharacteristics(platform, accessory, this.service, 'solar', displayName);
 
-    // fakegato history — 'energy' type records { time, power } in Watts
-    this.historyService = new FakeGatoHistoryService('energy', accessory, { storage: 'fs' });
+    // fakegato 'energy' history: one 10-minute average per entry (see eveHistory.ts)
+    this.history = platform.createEveHistory(FakeGatoHistoryService, accessory, displayName);
 
     if (matterEnabled) {
       // Solar production flows out of the meter — reported as exported energy.
@@ -75,10 +75,7 @@ export class SolarAccessory {
 
     this.meter.update(this.lastPowerW, this.lastEnergyKWh);
 
-    this.historyService.addEntry({
-      time: Math.round(Date.now() / 1000),
-      power: this.lastPowerW,
-    });
+    this.history.sample(this.lastPowerW);
 
     this.matter?.update({ powerW: -this.lastPowerW, exportedEnergyKWh: this.lastEnergyKWh }).catch(() => {});
 

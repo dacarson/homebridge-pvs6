@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.5.1 — 2026-11-18
+
+Fixes Eve history for accessories above 6.5 kW, and records history as 10-minute averages.
+
+### Fixed
+
+- **Eve history no longer wraps above 6553.5 W.** Eve stores power in a 16-bit field of tenths of a watt, so a reading of, say, 9183 W was recorded as about 2630 W. History power is now capped at 6553.5 W instead, and the plugin logs once per accessory when it caps. The live Eve Watts and Eve kWh values, and the Apple Home Energy view, were never affected and are not capped. See [Eve History](README.md#eve-history).
+
+### Changed
+
+- **One Eve history entry every 10 minutes**, holding the time-weighted average power for that window. Before, an entry was written on every poll (every 10 seconds by default), which filled fakegato's 4032-entry buffer in about 11 hours. History now covers about 28 days.
+- fakegato's own timer is disabled (`disableTimer: true`); the plugin does its own averaging.
+- Gaps between polls longer than 2 minutes (or two poll intervals, if longer) are treated as no data, so an outage doesn't carry the last reading forward.
+
+### Upgrading: clear old history in Eve
+
+Entries recorded by earlier versions stay in Eve, including any wrapped readings above 6.5 kW. To remove them, open the accessory's history in the Eve app, tap **Edit**, and delete the old entries. New 10-minute entries keep arriving afterwards. Don't delete fakegato's `*_persist.json` files to reset history: Eve only asks for entries newer than the last one it downloaded, so it would ignore a fresh file until it caught up.
+
 ## 1.5.0 — 2026-11-04
 
 Reduces HomeKit traffic. The plugin used to send about 1,000 HomeKit events an hour, and this release cuts that while keeping automations working.

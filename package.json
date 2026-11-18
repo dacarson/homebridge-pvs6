@@ -1,7 +1,7 @@
 {
   "name": "homebridge-pvs6",
   "displayName": "PVS6 Solar",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Homebridge plugin for SunStrong PVS6 solar monitoring — Eve Energy accessories with fakegato history.",
   "author": {
     "name": "David Carson",
@@ -23,7 +23,8 @@
   "main": "dist/index.js",
   "files": [
     "dist",
-    "config.schema.json"
+    "config.schema.json",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "rimraf ./dist && tsc",

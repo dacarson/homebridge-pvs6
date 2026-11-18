@@ -13,6 +13,7 @@ const pvs6Discovery_1 = require("./pvs6Discovery");
 const pvs6DiscoveryCache_1 = require("./pvs6DiscoveryCache");
 const throttle_1 = require("./throttle");
 const meterCharacteristics_1 = require("./meterCharacteristics");
+const eveHistory_1 = require("./eveHistory");
 const MIN_POLL_INTERVAL = 5;
 const AUTH_RETRY_MS = 30000;
 const AUTH_BACKOFF_MS = 60000;
@@ -30,6 +31,9 @@ class PVS6Platform {
         // accessories in Eve/HomeKit only, since that split is purely for Eve's
         // characteristic limitation, not a Matter one.
         this.gridMatterBridge = null;
+        // Eve history: every accessory samples on each poll; this timer writes one
+        // averaged entry per accessory every 10 minutes. See eveHistory.ts.
+        this.historyRecorders = [];
         this.pollInFlight = false;
         this.backedOff = false;
         this.consecutiveNetworkErrors = 0;
@@ -85,6 +89,9 @@ class PVS6Platform {
             }
             if (this.updateStatsTimer) {
                 clearInterval(this.updateStatsTimer);
+            }
+            if (this.historyTimer) {
+                clearInterval(this.historyTimer);
             }
         });
     }
@@ -175,6 +182,23 @@ class PVS6Platform {
             const homeUuid = this.api.hap.uuid.generate(`${serialNumber}-home`);
             this.homeConsumptionAccessory = new homeConsumptionAccessory_1.HomeConsumptionAccessory(this, this.getOrCreateAccessory(homeUuid, homeName), FakeGatoHistoryService, homeName, serialNumber);
         }
+        this.historyTimer = setInterval(() => {
+            const now = Date.now();
+            for (const recorder of this.historyRecorders) {
+                recorder.record(now);
+            }
+        }, eveHistory_1.EVE_HISTORY_INTERVAL_MS);
+        this.historyTimer.unref?.();
+    }
+    // fakegato 'energy' history for one accessory. fakegato's own timer is
+    // disabled: it averages samples by count, not time, and doesn't cap power.
+    createEveHistory(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    FakeGatoHistoryService, accessory, name) {
+        const service = new FakeGatoHistoryService('energy', accessory, { storage: 'fs', disableTimer: true });
+        const recorder = new eveHistory_1.EveHistoryRecorder(service, name, this.log, (0, eveHistory_1.historyMaxGapMs)(this.pollIntervalMs));
+        this.historyRecorders.push(recorder);
+        return recorder;
     }
     // Power-derived On switch with the configured hold, shared stats and logging.
     createPowerSwitch(name) {

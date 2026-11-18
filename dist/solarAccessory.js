@@ -28,8 +28,8 @@ class SolarAccessory {
         this.service.setCharacteristic(Characteristic.Name, displayName);
         // On (power-derived, with deadband + hold), OutletInUse, Eve Watts, Eve kWh.
         this.meter = new meterCharacteristics_1.MeterCharacteristics(platform, accessory, this.service, 'solar', displayName);
-        // fakegato history — 'energy' type records { time, power } in Watts
-        this.historyService = new FakeGatoHistoryService('energy', accessory, { storage: 'fs' });
+        // fakegato 'energy' history: one 10-minute average per entry (see eveHistory.ts)
+        this.history = platform.createEveHistory(FakeGatoHistoryService, accessory, displayName);
         if (matterEnabled) {
             // Solar production flows out of the meter — reported as exported energy.
             // Matter's activePower sign convention is positive = drawing power,
@@ -52,10 +52,7 @@ class SolarAccessory {
         this.lastPowerW = reading.pvPowerW;
         this.lastEnergyKWh = reading.pvEnergyKWh;
         this.meter.update(this.lastPowerW, this.lastEnergyKWh);
-        this.historyService.addEntry({
-            time: Math.round(Date.now() / 1000),
-            power: this.lastPowerW,
-        });
+        this.history.sample(this.lastPowerW);
         this.matter?.update({ powerW: -this.lastPowerW, exportedEnergyKWh: this.lastEnergyKWh }).catch(() => { });
         this.platform.log.debug(`Solar: ${this.lastPowerW}W  ${this.lastEnergyKWh}kWh`);
     }
